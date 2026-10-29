@@ -1,0 +1,263 @@
+ability abilities.Render g where
+  currentNamespace : {Render g} Namespace
+  fragment : Namespace -> Optional k -> '{g, Render g} a ->{Render g} a
+  node : k -> Node g -> '{g, Render g} () ->{Render g} ()
+  nodeWith : k -> '{g, Render g} (Node g) ->{Render g} ()
+  useCell : ((m ->{Update} ()) ->{g, Effect g, UseCell a m g} a) ->{Render g} a
+
+{{
+Like {element}, but the element's modifiers come from its own body, after its children: state the body reads with {useState} or a store belongs to this element, so a change to it re-renders this element and nothing above it. A table row that reads whether it is selected inside its own body, and returns `[class (if isSelected then "danger" else "")]` as its last line, re-renders alone when the selection moves.
+}}
+abilities.Render.elementWith : Text -> '{g, Render g} [Modifier g] ->{Render g} ()
+abilities.Render.elementWith localName body =
+  fullName = Qualified currentNamespace localName
+  nodeWith fullName do Element fullName body()
+
+dom.internal.render : [Message] -> Optional (IncrementalRecord (Node g) {g, Effect g}) -> '{g, Render g} () ->{g, Effect g, Stream (Delta (Node g))} IncrementalRecord (Node g) {g, Effect g}
+dom.internal.render messages previous body = reconcileWithDeltas messages previous do
+  go : Namespace -> HintPath -> '{g, Render g} a ->{g, Incremental (Node g) {g, Effect g}} a
+  go ns subkeys body =
+    handle body()
+    with cases
+      { Render.fragment newNS key body -> resume } ->
+        subkeys' = match key with
+          Some key -> Within (Any key) subkeys
+          None     -> subkeys
+        result = go newNS subkeys' body
+        go ns subkeys do resume result
+      { currentNamespace -> resume }               -> go ns subkeys do resume ns
+      { node k value body -> resume }              ->
+        compute_ (Some (Within (Any k) subkeys)) do
+          go ns Here body
+          value
+        go ns subkeys resume
+      { nodeWith k body -> resume }                ->
+        compute_ (Some (Within (Any k) subkeys)) do go ns Here body
+        go ns subkeys resume
+      { useCell def -> resume }                    ->
+        (CellState value _ _) = cell (Some subkeys) (buildCell def)
+        go ns subkeys do resume value
+      { result }                                   -> result
+  ignore (go HTML Here body)
+  Root
+
+{{
+A store of values by key, each with its own subscribers: `useKeyed` reads one key and subscribes the component reading it, and `setKeyed` tells only the subscribers of the keys it changes. It is how a list's rows can each hold their own data, the way a signal per row does in a fine-grained framework, so that changing one row re-renders that row and nothing else.
+
+A provider holds the store and exposes it through an accessor, as for {type Singleton}.
+}}
+type provider.Keyed k v = Keyed (Map k v) (Map k [Optional v ->{Update} ()])
+
+type provider.Keyed.Accessor k v b = Accessor (Keyed k v -> (Keyed k v, b))
+
+provider.Keyed.Accessor.apply : Keyed.Accessor k v b -> Keyed k v -> (Keyed k v, b)
+provider.Keyed.Accessor.apply = cases Keyed.Accessor.Accessor f -> f
+
+provider.Keyed.new : Keyed k v
+provider.Keyed.new = Keyed Map.empty Map.empty
+
+{{ The value at `key`, subscribing this component to it: when `setKeyed` changes that key, this component renders again with the new value. }}
+provider.Keyed.useKeyed : (∀ b. Keyed.Accessor k v b ->{g} b) -> k ->{Render g} Optional v
+provider.Keyed.useKeyed access key =
+  subscribers subs = Map.get key subs |> Optional.getOrElse []
+  useCell (send -> let
+    subscribe = cases Keyed values subs -> (Keyed values (Map.insert key (send +: subscribers subs) subs), Map.get key values)
+    unsubscribe = cases Keyed values subs -> (Keyed values (Map.insert key (List.deleteFirst (Universal.eq send) (subscribers subs)) subs), ())
+    value = access (Keyed.Accessor.Accessor subscribe)
+    onCleanup (_ -> access (Keyed.Accessor.Accessor unsubscribe))
+    onMessage (_ newValue -> newValue)
+    value)
+
+{{ Sets (`Some`) or removes (`None`) the values at the given keys, and tells each key's subscribers its new value; no other component is told. }}
+provider.Keyed.setKeyed : (∀ b. Keyed.Accessor k v b ->{g} b) -> [(k, Optional v)] ->{g, Update} ()
+provider.Keyed.setKeyed access changes =
+  apply = cases
+    Keyed values subs ->
+      store values = cases
+        (key, Some value) -> Map.insert key value values
+        (key, None)       -> Map.delete key values
+      tell = cases (key, value) -> Map.get key subs |> Optional.getOrElse [] |> List.map (send -> do send value)
+      (Keyed (List.foldLeft store values changes) subs, List.flatMap tell changes)
+  List.foreach (notify -> notify()) (access (Keyed.Accessor.Accessor apply))
+
+{{ Adds values without telling anyone: for keys nobody can have subscribed to yet, such as the rows about to be drawn. }}
+provider.Keyed.putKeyed : (∀ b. Keyed.Accessor k v b ->{g} b) -> [(k, v)] ->{g} ()
+provider.Keyed.putKeyed access entries =
+  access (Keyed.Accessor.Accessor cases Keyed values subs -> (Keyed (List.foldLeft (values -> cases (key, value) -> Map.insert key value values) values entries) subs, ()))
+
+{{ Replaces every value without telling anyone: for a caller about to render every subscriber again, or remove it, anyway. }}
+provider.Keyed.replaceKeyed : (∀ b. Keyed.Accessor k v b ->{g} b) -> Map k v ->{g} ()
+provider.Keyed.replaceKeyed access values' = access (Keyed.Accessor.Accessor cases Keyed _ subs -> (Keyed values' subs, ()))
+
+{{ The value at `key`, without subscribing to it: for event handlers. }}
+provider.Keyed.readKeyed : (∀ b. Keyed.Accessor k v b ->{g} b) -> k ->{g} Optional v
+provider.Keyed.readKeyed access key = access (Keyed.Accessor.Accessor cases Keyed values subs -> (Keyed values subs, Map.get key values))
+
+{{
+Which one key, if any, is selected, with subscribers by key: `useSelected` asks whether one key is the selected one, and `select` tells only the subscribers of the keys whose answer changes, the one that was selected and the one that now is. It is what a `Selector` is in a fine-grained framework: selecting one row of a thousand re-renders two rows.
+}}
+type provider.Selector k = Selector (Optional k) (Map k [Boolean ->{Update} ()])
+
+type provider.Selector.Accessor k b = Accessor (Selector k -> (Selector k, b))
+
+provider.Selector.Accessor.apply : Selector.Accessor k b -> Selector k -> (Selector k, b)
+provider.Selector.Accessor.apply = cases Selector.Accessor.Accessor f -> f
+
+provider.Selector.new : Selector k
+provider.Selector.new = Selector None Map.empty
+
+{{ Whether `key` is the selected one, subscribing this component to the answer. }}
+provider.Selector.useSelected : (∀ b. Selector.Accessor k b ->{g} b) -> k ->{Render g} Boolean
+provider.Selector.useSelected access key =
+  subscribers subs = Map.get key subs |> Optional.getOrElse []
+  useCell (send -> let
+    subscribe = cases Selector current subs -> (Selector current (Map.insert key (send +: subscribers subs) subs), current === Some key)
+    unsubscribe = cases Selector current subs -> (Selector current (Map.insert key (List.deleteFirst (Universal.eq send) (subscribers subs)) subs), ())
+    value = access (Selector.Accessor.Accessor subscribe)
+    onCleanup (_ -> access (Selector.Accessor.Accessor unsubscribe))
+    onMessage (_ selected -> selected)
+    value)
+
+{{ Selects `key` (or nothing), telling the subscribers of the previously selected key and of the new one. }}
+provider.Selector.select : (∀ b. Selector.Accessor k b ->{g} b) -> Optional k ->{g, Update} ()
+provider.Selector.select access selected' =
+  use List ++
+  apply = cases
+    Selector current subs ->
+      tell flag key = Map.get key subs |> Optional.getOrElse [] |> List.map (send -> do send flag)
+      notify = if current === selected' then [] else List.flatMap (tell false) (Optional.toList current) ++ List.flatMap (tell true) (Optional.toList selected')
+      (Selector selected' subs, notify)
+  List.foreach (notify -> notify()) (access (Selector.Accessor.Accessor apply))
+
+type bench.rowsfg.Model = { ids : [Nat], nextId : Nat, seed : Nat }
+
+bench.rowsfg.Model.initial : bench.rowsfg.Model
+bench.rowsfg.Model.initial = bench.rowsfg.Model.Model [] 1 42
+
+{{ The rows benchmark's stores: each row's label, and which row is selected. }}
+ability bench.rowsfg.Rows where
+  labels : Keyed.Accessor Nat Text b ->{Rows} b
+  selection : Selector.Accessor Nat b ->{Rows} b
+
+bench.rowsfg.provider : Provider i Rows
+bench.rowsfg.provider =
+  handler keyed selector = cases
+    { labels accessor -> resume }    ->
+      (keyed', result) = Keyed.Accessor.apply accessor keyed
+      handle resume result with handler keyed' selector
+    { selection accessor -> resume } ->
+      (selector', result) = Selector.Accessor.apply accessor selector
+      handle resume result with handler keyed selector'
+    { () }                           -> ()
+  Provider.define (handler Keyed.new Selector.new)
+
+{{ Draws `count` new rows with the generator {bench.rows.Model.append} uses, so both apps get the same labels: their ids and labels, and the model with their ids appended. }}
+bench.rowsfg.draw : Nat -> bench.rowsfg.Model -> ([(Nat, Text)], bench.rowsfg.Model)
+bench.rowsfg.draw count model =
+  use List ++
+  appended = bench.rows.Model.append count (bench.rows.Model.Model [] (bench.rowsfg.Model.nextId model) (bench.rowsfg.Model.seed model) None)
+  fresh = bench.rows.Model.rows appended |> List.map (row -> (Row.id row, Row.label row))
+  (fresh, bench.rowsfg.Model.Model (bench.rowsfg.Model.ids model ++ List.map at1 fresh) (bench.rows.Model.nextId appended) (bench.rows.Model.seed appended))
+
+{{ One row: its label and its selection are its own state, so changing either re-renders this row alone. }}
+bench.rowsfg.rowView : ((bench.rowsfg.Model ->{Rows} bench.rowsfg.Model) ->{Update} ()) -> Nat ->{Render {Rows}} ()
+bench.rowsfg.rowView setModel rowId =
+  use Render text
+  region rowId do
+    elementWith "tr" do
+      label = useKeyed labels rowId |> Optional.getOrElse ""
+      isSelected = useSelected selection rowId
+      td [class "col-md-1"] do text (Nat.toText rowId)
+      td [class "col-md-4"] do
+        a [class "lbl", onClick do Selector.select selection (Some rowId)] do text label
+      td [class "col-md-1"] do
+        a [class "remove", onClick do setModel (bench.rowsfg.Model.ids.modify (List.filter (id -> id Nat.!= rowId)))] do text "x"
+      td [class "col-md-6"] do ()
+      [class (if isSelected then "danger" else "")]
+
+bench.rowsfg.actionButton : Text -> Text -> '{Rows, Update} () ->{Render {Rows}} ()
+bench.rowsfg.actionButton buttonId label handler = button [attr.id buttonId, onClick handler] do Render.text label
+
+{{ Replaces every row with `count` new ones, putting their labels in the store before the table renders them. }}
+bench.rowsfg.replaceWith : ((bench.rowsfg.Model ->{Rows} bench.rowsfg.Model) ->{Update} ()) -> bench.rowsfg.Model -> Nat ->{Rows, Update} ()
+bench.rowsfg.replaceWith setModel model count =
+  (fresh, model') = draw count (bench.rowsfg.Model.ids.set [] model)
+  replaceKeyed labels (Map.fromList fresh)
+  setModel (_ -> model')
+
+{{ Appends a thousand new rows. }}
+bench.rowsfg.append : ((bench.rowsfg.Model ->{Rows} bench.rowsfg.Model) ->{Update} ()) -> bench.rowsfg.Model ->{Rows, Update} ()
+bench.rowsfg.append setModel model =
+  (fresh, model') = draw 1000 model
+  putKeyed labels fresh
+  setModel (_ -> model')
+
+{{ Appends " !!!" to every tenth row's label, telling only those rows. }}
+bench.rowsfg.updateEveryTenth : bench.rowsfg.Model ->{Rows, Update} ()
+bench.rowsfg.updateEveryTenth model =
+  use Nat ==
+  changed = cases
+    (rowId, index) | Nat.mod index 10 == 0 -> Some (rowId, readKeyed labels rowId |> Optional.map (label -> label Text.++ " !!!"))
+                   | otherwise -> None
+  setKeyed labels (bench.rowsfg.Model.ids model |> List.indexed |> List.filterMap changed)
+
+{{ Removes every row. }}
+bench.rowsfg.clear : ((bench.rowsfg.Model ->{Rows} bench.rowsfg.Model) ->{Update} ()) ->{Rows, Update} ()
+bench.rowsfg.clear setModel =
+  replaceKeyed labels Map.empty
+  setModel (bench.rowsfg.Model.ids.set [])
+
+{{ Swaps the second id and the second-to-last of a thousand. }}
+bench.rowsfg.swapIds : [Nat] -> [Nat]
+bench.rowsfg.swapIds ids =
+  if List.size ids Nat.> 998 then
+    match (List.at 1 ids, List.at 998 ids) with
+      (Some second, Some secondToLast) -> ids |> List.replace 1 secondToLast |> List.replace 998 second
+      _ -> ids
+  else ids
+
+{{ Moves the last row to the front and puts one new row after it. }}
+bench.rowsfg.rotate : ((bench.rowsfg.Model ->{Rows} bench.rowsfg.Model) ->{Update} ()) -> bench.rowsfg.Model ->{Rows, Update} ()
+bench.rowsfg.rotate setModel model = match bench.rowsfg.Model.ids model with
+  rest :+ last ->
+    use List ++
+    (fresh, model') = draw 1 (bench.rowsfg.Model.ids.set [] model)
+    putKeyed labels fresh
+    setModel (_ -> bench.rowsfg.Model.ids.set ([last] ++ List.map at1 fresh ++ rest) model')
+  [] -> ()
+
+{{ The rows benchmark written fine-grained, as the Leptos version is: the root holds only the row ids, each row's label lives in a {type Keyed} store, and selection in a {type Selector}, so updating labels or the selection never re-renders the table. }}
+bench.rowsfg.ui : '{Rows, Render {Rows}} ()
+bench.rowsfg.ui = do
+  (model, updateModel) = useState do bench.rowsfg.Model.initial
+  setModel : (bench.rowsfg.Model ->{Rows} bench.rowsfg.Model) ->{Update} ()
+  setModel change = updateModel change
+  el.div [attr.id "app"] do
+    el.div [class "buttons"] do
+      actionButton "run" "Create 1,000 rows" do replaceWith setModel model 1000
+      actionButton "runlots" "Create 10,000 rows" do replaceWith setModel model 10000
+      actionButton "add" "Append 1,000 rows" do bench.rowsfg.append setModel model
+      actionButton "update" "Update every 10th row" do updateEveryTenth model
+      actionButton "clear" "Clear" do bench.rowsfg.clear setModel
+      actionButton "swaprows" "Swap rows" do setModel (bench.rowsfg.Model.ids.modify swapIds)
+      actionButton "rotate" "Rotate and insert" do bench.rowsfg.rotate setModel model
+    table [class "table"] do
+      tbody [attr.id "tbody"] do bench.rowsfg.Model.ids model |> List.foreach (rowView setModel)
+
+{{ Like {bench.build.app}, with a provider for the UI's abilities. }}
+bench.build.appWith : BuildConfig -> Provider JS {Rows} -> '{Rows, Render {Rows}} () ->{IO, Exception, Stream ProgressEvent} BuildOutput
+bench.build.appWith config provider ui =
+  warp.withProgressEvents config do
+    exposeFunction_ "main" (_ -> mount (global "document" :: "body") provider ui)
+
+bench.rowsfg.build : '{IO, Exception} ()
+bench.rowsfg.build = do
+  use Text ++
+  match getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("rows-" ++ configName) (FilePath outDir) (withPhaseTimes do appWith config bench.rowsfg.provider bench.rowsfg.ui)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+---

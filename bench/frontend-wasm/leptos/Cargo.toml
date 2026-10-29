@@ -1,0 +1,41 @@
+# A standalone workspace for the frontend benchmark (docs/REPORT.md): Leptos 0.8,
+# patched to the public AlygnHealth/leptos fork pinned below, with fat LTO and one
+# codegen unit.
+[workspace]
+resolver = "2"
+members = ["counter", "rows", "cards"]
+
+[workspace.dependencies]
+leptos = { version = "0.8", features = ["csr"] }
+wasm-bindgen = "0.2.129"
+console_error_panic_hook = "0.1.7"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"
+
+[patch.crates-io]
+leptos = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+leptos_macro = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+leptos_dom = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+leptos_config = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+leptos_server = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+leptos_hot_reload = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+tachys = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+reactive_graph = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+reactive_stores = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+reactive_stores_macro = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+any_spawner = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+either_of = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+hydration_context = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+next_tuple = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+oco_ref = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+or_poisoned = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+const_str_slice_concat = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+throw_error = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+server_fn = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }
+server_fn_macro = { git = "https://github.com/AlygnHealth/leptos", rev = "f8170f31e7ff1dfc07bcaf24bd72173325ec1226" }

@@ -1,0 +1,442 @@
+{{
+One step of the second pass of {app.Root.internal.synchronize}: attach a new subtree's root where its {type Location} says, or apply a delta that is not a {Resolve}.
+}}
+structural type app.Root.internal.PreparedStep g
+  = AttachTarget Key (EventTarget g) Location
+  | StepDelta (Delta (Node g))
+
+{{
+A node resolved in the current {app.Root.internal.synchronize} pass whose parent has not resolved (yet): its depth, key, DOM target, the trie of it and of the descendants already attached to it, and where it goes. The key is the very value ink placed its children under and its next sibling after, so the two can be matched by identity.
+}}
+structural type app.Root.internal.PendingNode g
+  = PendingNode
+      Nat Key (EventTarget g) (Trie Key.Segment (EventTarget g)) Location
+
+{{
+Whether `childSegments` is the key of a direct child of the node whose key is `parentSegments`, `parentDepth` segments long.
+}}
+app.Root.internal.isChildKey : Nat -> [Key.Segment] -> [Key.Segment] -> Boolean
+app.Root.internal.isChildKey parentDepth parentSegments childSegments =
+  (List.size childSegments Nat.== (parentDepth Nat.+ 1))
+    && (List.take parentDepth childSegments === parentSegments)
+
+{{
+Grafts each `(segment, subtree)` of `children` under the node at `parentSegments`, walking the path from the root once for all of them. A child already present keeps its own children beside the subtree's.
+}}
+app.Root.internal.trieGraftChildren :
+  [Key.Segment]
+  -> [(Key.Segment, Trie Key.Segment val)]
+  -> Trie Key.Segment val
+  -> Trie Key.Segment val
+app.Root.internal.trieGraftChildren parentSegments children rootTrie =
+  use Trie Trie head tail
+  len = List.size parentSegments
+  graftOne tailMap = cases
+    (seg, subtree) ->
+      merged = match Map.get seg tailMap with
+        None -> subtree
+        Some existing -> Trie (head subtree) (Map.union (tail subtree) (tail existing))
+      Map.insert seg merged tailMap
+  go idx curr =
+    if idx Nat.>= len then Trie (head curr) (List.foldLeft graftOne (tail curr) children)
+    else
+      match List.at idx parentSegments with
+        None -> curr
+        Some seg ->
+          tailMap = tail curr
+          child = Map.get seg tailMap |> Optional.getOrElse Trie.empty
+          Trie (head curr) (Map.insert seg (go (idx Nat.+ 1) child) tailMap)
+  go 0 rootTrie
+
+{{
+Grafts the tries of `pending` subtree roots into `rootTrie`, batching consecutive roots that share a parent into one walk ({app.Root.internal.trieGraftChildren}). A root placed after the root before it is its sibling, which needs no comparison of key prefixes. The root node itself (depth 0) replaces the root's value and keeps its children.
+}}
+app.Root.internal.graftPending :
+  [PendingNode g] -> Trie Key.Segment (EventTarget g) -> Trie Key.Segment (EventTarget g)
+app.Root.internal.graftPending pending rootTrie =
+  use List :+
+  use PendingNode PendingNode
+  use Trie Trie head tail
+  flush = cases
+    (trie, None, _) -> trie
+    (trie, Some (parentSegments, children), _) ->
+      app.Root.internal.trieGraftChildren parentSegments children trie
+  placedAfter previousKey = cases
+    After siblingKey -> siblingKey === previousKey
+    _ -> false
+  step acc = cases
+    PendingNode 0 _ _ subtree _ ->
+      trie = flush acc
+      (Trie (head subtree) (Map.union (tail subtree) (tail trie)), None, None)
+    PendingNode depth key _ subtree location ->
+      segments = Key.segments key
+      match segments with
+        [] -> acc
+        _ :+ seg ->
+          match acc with
+            (trie, Some (groupParent, children), Some previousKey) | placedAfter previousKey location ->
+              (trie, Some (groupParent, children :+ (seg, subtree)), Some key)
+            (trie, Some (groupParent, children), _) | groupParent === List.take (Nat.diff depth 1) segments ->
+              (trie, Some (groupParent, children :+ (seg, subtree)), Some key)
+            _ -> (flush acc, Some (List.take (Nat.diff depth 1) segments, [(seg, subtree)]), Some key)
+  flush (List.foldLeft step (rootTrie, None, None) pending)
+
+{{
+Removes the children `childSegments` of the node at `parentSegments`, with their subtrees, walking the path from the root once for all of them. Returns the removed children's values in order, the parent's value, whether the parent has no children left, and the new trie. Removing as many children as the parent has removes all of them (sibling keys are unique), so the parent's children are dropped at once, in key order rather than the given one.
+}}
+app.Root.internal.trieRemoveChildren :
+  [Key.Segment]
+  -> [Key.Segment]
+  -> Trie Key.Segment val
+  -> ([val], Optional val, Boolean, Trie Key.Segment val)
+app.Root.internal.trieRemoveChildren parentSegments childSegments rootTrie =
+  use List :+
+  use Trie Trie head tail
+  len = List.size parentSegments
+  removeOne acc seg = match acc with
+    (removed, tailMap) ->
+      match Map.get seg tailMap with
+        None -> acc
+        Some child ->
+          removed' = match head child with
+            Some value -> removed :+ value
+            None -> removed
+          (removed', Map.delete seg tailMap)
+  go idx curr =
+    if idx Nat.>= len then
+      children = tail curr
+      if List.size childSegments Nat.== Map.size children then
+        removed = List.filterMap Trie.head (Map.values children)
+        (removed, head curr, true, Trie (head curr) Map.empty)
+      else
+        (removed, tailMap) = List.foldLeft removeOne ([], children) childSegments
+        (removed, head curr, Map.isEmpty tailMap, Trie (head curr) tailMap)
+    else
+      match List.at idx parentSegments with
+        None -> ([], None, false, curr)
+        Some seg ->
+          match Map.get seg (tail curr) with
+            None -> ([], None, false, curr)
+            Some child ->
+              (removed, parent, emptied, child') = go (idx Nat.+ 1) child
+              (removed, parent, emptied, Trie (head curr) (Map.insert seg child' (tail curr)))
+  go 0 rootTrie
+
+{{
+Applies incremental {type Node} `deltas` to the live browser DOM.
+
+Without {Resolve}s it applies each delta directly. With them it makes two passes. The first creates every new DOM node and builds new subtrees bottom-up: ink resolves a new computation after all of its children, each placed under it or after the sibling before it, so when a node resolves, the pending nodes on top of the stack that are its children are attached to it in order (found by following the chain of locations, under it and then after each sibling, with the keys compared by identity; a broken chain falls back to comparing key prefixes) and their tries become its trie, with no lookups from the root. Only the roots of new subtrees are grafted into the existing trie, batched by parent ({app.Root.internal.graftPending}). The second pass attaches those roots and applies the other deltas in their original order; a root placed after the root attached just before it needs no lookup. Consecutive {Remove}s of children of one parent take one walk of the trie ({app.Root.internal.trieRemoveChildren}), and when they leave an element with no children, its content is cleared in one step instead of removing each child. Listener-free targets share a single empty listener `Ref`.
+}}
+app.Root.internal.synchronize :
+  Ref JS (JSState g) -> [Delta (Node g)] ->{JS} ()
+app.Root.internal.synchronize state deltas =
+  use Key Segment
+  use List :+
+  use PendingNode PendingNode
+  use PreparedStep AttachTarget StepDelta
+  use app.Root.internal graftPending isChildKey listenerToJSFunc synchronizeAttributes synchronizeEventListeners synchronizeProperties trieInsert trieLookup triePopSubtree trieRemoveChildren
+  use app.Root.internal.JSState enqueueAction
+  totalDeltas = List.size deltas
+  when (totalDeltas Nat.> 0) do
+    enqueue = enqueueAction state
+    init = Ref.read state
+    root = JSState.root init
+    sharedEmptyRef = JS.ref Map.empty
+    checkHasResolve idx =
+      if idx Nat.>= totalDeltas then false
+      else
+        match List.at idx deltas with
+          Some (Resolve _ _ _) -> true
+          _ -> checkHasResolve (idx Nat.+ 1)
+    attachAt : EventTarget g -> Location -> Trie Segment (EventTarget g) ->{JS} ()
+    attachAt eventTarget location jsDOM =
+      match location with
+        AtRoot -> ()
+        After (Key siblingSegments) ->
+          match trieLookup siblingSegments jsDOM with
+            Some siblingHandle ->
+              JSValue.invoke1_
+                "after"
+                (EventTarget.object eventTarget)
+                (EventTarget.object siblingHandle)
+            None -> ()
+        Under (Key parentSegments) ->
+          match trieLookup parentSegments jsDOM with
+            Some parentHandle ->
+              JSValue.invoke1_
+                "prepend"
+                (EventTarget.object eventTarget)
+                (EventTarget.object parentHandle)
+            None -> ()
+    runCapture : (JSValue ->{g, Update} ()) -> JSValue ->{JS} ()
+    runCapture capture el =
+      action : '{g, Update, Suspend g} ()
+      action = do capture el
+      enqueue (Execute Main action)
+    setupElement : JSValue -> [Modifier g] ->{JS} EventTarget g
+    setupElement jsObject = cases
+      [] ->
+        EventTarget jsObject sharedEmptyRef
+      [Attribute (Unqualified attrName) attrVal] ->
+        JSValue.invokeText2_ "setAttribute" attrName attrVal jsObject
+        EventTarget jsObject sharedEmptyRef
+      [Attribute (Unqualified attrName) attrVal, EventListener evName listener] ->
+        JSValue.invokeText2_ "setAttribute" attrName attrVal jsObject
+        jsFn = listenerToJSFunc listener enqueue
+        JSValue.invokeTextVal_ "addEventListener" evName jsFn jsObject
+        EventTarget jsObject (JS.ref (Map.singleton evName (Map.singleton listener jsFn)))
+      [EventListener evName listener] ->
+        jsFn = listenerToJSFunc listener enqueue
+        JSValue.invokeTextVal_ "addEventListener" evName jsFn jsObject
+        EventTarget jsObject (JS.ref (Map.singleton evName (Map.singleton listener jsFn)))
+      [EventListener evName listener, Attribute (Unqualified attrName) attrVal] ->
+        JSValue.invokeText2_ "setAttribute" attrName attrVal jsObject
+        jsFn = listenerToJSFunc listener enqueue
+        JSValue.invokeTextVal_ "addEventListener" evName jsFn jsObject
+        EventTarget jsObject (JS.ref (Map.singleton evName (Map.singleton listener jsFn)))
+      [Attribute (Unqualified k0) v0, Attribute (Unqualified k1) v1] | k0 Text.!= k1 ->
+        JSValue.invokeText2_ "setAttribute" k0 v0 jsObject
+        JSValue.invokeText2_ "setAttribute" k1 v1 jsObject
+        EventTarget jsObject sharedEmptyRef
+      [Attribute (Unqualified k0) v0, Attribute (Unqualified k1) v1, Attribute (Unqualified k2) v2]
+        | (k0 Text.!= k1) && (k1 Text.!= k2) && (k0 Text.!= k2) ->
+        JSValue.invokeText2_ "setAttribute" k0 v0 jsObject
+        JSValue.invokeText2_ "setAttribute" k1 v1 jsObject
+        JSValue.invokeText2_ "setAttribute" k2 v2 jsObject
+        EventTarget jsObject sharedEmptyRef
+      modifiers ->
+        (attrs, props, listeners, captures) = Modifier.collect modifiers
+        hasListeners = Boolean.not (Map.isEmpty listeners)
+        listenersRef =
+          if hasListeners then JS.ref Map.empty
+          else sharedEmptyRef
+        target = EventTarget jsObject listenersRef
+        synchronizeAttributes Map.empty attrs target
+        synchronizeProperties Map.empty props target
+        when hasListeners do
+          synchronizeEventListeners listeners target enqueue
+        List.foreach (capture -> runCapture capture jsObject) captures
+        target
+    applyNonResolve :
+      Trie Segment (EventTarget g)
+      -> Delta (Node g)
+      ->{JS} Trie Segment (EventTarget g)
+    applyNonResolve jsDOM = cases
+      Update (Key segments) (Element oldName oldModifiers) (Element newName newModifiers)
+        | oldName === newName ->
+        match trieLookup segments jsDOM with
+          None -> jsDOM
+          Some eventTarget ->
+            match (oldModifiers, newModifiers) with
+              ([Attribute (Unqualified oldAttr) oldVal], [Attribute (Unqualified newAttr) newVal]) ->
+                targetObj = EventTarget.object eventTarget
+                if oldAttr Text.== newAttr then
+                  when (oldVal Text.!= newVal) do
+                    JSValue.invokeText2_ "setAttribute" newAttr newVal targetObj
+                else
+                  JSValue.invokeText2_ "setAttribute" newAttr newVal targetObj
+                  JSValue.invokeText1_ "removeAttribute" oldAttr targetObj
+                jsDOM
+              ([], [Attribute (Unqualified newAttr) newVal]) ->
+                JSValue.invokeText2_ "setAttribute" newAttr newVal (EventTarget.object eventTarget)
+                jsDOM
+              ([Attribute (Unqualified oldAttr) _], []) ->
+                JSValue.invokeText1_ "removeAttribute" oldAttr (EventTarget.object eventTarget)
+                jsDOM
+              _ ->
+                (oldAttrs, oldProps, _, _) = Modifier.collect oldModifiers
+                (newAttrs, newProps, newListeners, _) = Modifier.collect newModifiers
+                synchronizeAttributes oldAttrs newAttrs eventTarget
+                synchronizeProperties oldProps newProps eventTarget
+                oldListenersMap = Ref.read (EventTarget.listeners eventTarget)
+                if Map.isEmpty oldListenersMap then
+                  if Map.isEmpty newListeners then jsDOM
+                  else
+                    freshTarget = EventTarget (EventTarget.object eventTarget) (JS.ref Map.empty)
+                    synchronizeEventListeners newListeners freshTarget enqueue
+                    trieInsert segments freshTarget jsDOM
+                else
+                  synchronizeEventListeners newListeners eventTarget enqueue
+                  jsDOM
+      Update (Key segments) (TextNode oldText) (TextNode newText) ->
+        match trieLookup segments jsDOM with
+          None -> jsDOM
+          Some eventTarget ->
+            when (oldText Text.!= newText) do
+              JSValue.setPropertyText "textContent" newText (EventTarget.object eventTarget)
+            jsDOM
+      Remove (Key segments) _ ->
+        (removedOpt, jsDOM') = triePopSubtree segments jsDOM
+        match removedOpt with
+          Some eventTarget ->
+            JSValue.invoke0_ "remove" (EventTarget.object eventTarget)
+          None -> ()
+        jsDOM'
+      Relocate (Key segments) location ->
+        match trieLookup segments jsDOM with
+          Some eventTarget ->
+            attachAt eventTarget location jsDOM
+          None -> ()
+        jsDOM
+      _ -> jsDOM
+    removeRun at total parentSegments idx childSegments =
+      if idx Nat.>= total then (childSegments, idx)
+      else
+        match at idx with
+          Some (Remove (Key segments) _) | isChildKey (List.size parentSegments) parentSegments segments ->
+            match segments with
+              _ :+ seg -> removeRun at total parentSegments (idx Nat.+ 1) (childSegments :+ seg)
+              [] -> (childSegments, idx)
+          _ -> (childSegments, idx)
+    applyRemoves :
+      [Segment] -> [Segment] -> Trie Segment (EventTarget g) ->{JS} Trie Segment (EventTarget g)
+    applyRemoves parentSegments childSegments jsDOM =
+      (removed, parentTarget, emptied, jsDOM') = trieRemoveChildren parentSegments childSegments jsDOM
+      match parentTarget with
+        Some parent | emptied && (List.size removed Nat.> 1) && Boolean.not (List.isEmpty parentSegments) ->
+          JSValue.setPropertyText "textContent" "" (EventTarget.object parent)
+        _ -> List.foreach (target -> JSValue.invoke0_ "remove" (EventTarget.object target)) removed
+      jsDOM'
+    domNodes' =
+      if checkHasResolve 0 then
+        doc = JSValue.getProperty "document" (JSValue.global "globalThis")
+        createTarget : Node g ->{JS} EventTarget g
+        createTarget = cases
+          Element elemName modifiers ->
+            jsNode =
+              match elemName with
+                Qualified HTML localName ->
+                  JSValue.invokeText1 "createElement" localName doc
+                Unqualified localName ->
+                  JSValue.invokeText1 "createElement" localName doc
+                Qualified ns localName ->
+                  JSValue.invokeText2 "createElementNS" (Namespace.toText ns) localName doc
+            setupElement jsNode modifiers
+          TextNode contents ->
+            EventTarget (JSValue.invokeText1 "createTextNode" contents doc) sharedEmptyRef
+          Root -> EventTarget root sharedEmptyRef
+        countChildren depth segments stack total taken =
+          if taken Nat.>= total then taken
+          else
+            match List.at (Nat.diff total (taken Nat.+ 1)) stack with
+              Some (PendingNode _ childKey _ _ _) | isChildKey depth segments (Key.segments childKey) ->
+                countChildren depth segments stack total (taken Nat.+ 1)
+              _ -> taken
+        chainChildren depth key stack total =
+          use Nat + == >
+          walk taken =
+            if (taken + 1) > total then None
+            else
+              match List.at (Nat.diff total (taken + 1)) stack with
+                Some (PendingNode childDepth _ _ _ (Under parentKey)) | (childDepth == (depth + 1)) && (parentKey === key) ->
+                  Some (taken + 1)
+                Some (PendingNode childDepth _ _ _ (After siblingKey)) | (childDepth == (depth + 1)) && Boolean.not ((taken + 2) > total) ->
+                  match List.at (Nat.diff total (taken + 2)) stack with
+                    Some (PendingNode _ belowKey _ _ _) | belowKey === siblingKey -> walk (taken + 1)
+                    _ -> None
+                _ -> None
+          match List.at (Nat.diff total 1) stack with
+            Some (PendingNode childDepth _ _ _ _) | (total > 0) && (childDepth == (depth + 1)) -> walk 0
+            _ -> Some 0
+        attachChild : EventTarget g -> Optional JSValue -> PendingNode g ->{JS} Optional JSValue
+        attachChild parentTarget previous = cases
+          PendingNode _ _ childTarget _ _ ->
+            childObj = EventTarget.object childTarget
+            match previous with
+              None -> JSValue.invoke1_ "prepend" childObj (EventTarget.object parentTarget)
+              Some previousObj -> JSValue.invoke1_ "after" childObj previousObj
+            Some childObj
+        childEntry tailMap = cases
+          PendingNode _ key _ subtree _ ->
+            match Key.segments key with
+              _ :+ seg -> Map.insert seg subtree tailMap
+              [] -> tailMap
+        rootSteps pending =
+          List.filterMap
+            (cases
+              PendingNode _ _ _ _ AtRoot -> None
+              PendingNode _ key target _ location -> Some (AttachTarget key target location))
+            pending
+        prepareLoop idx jsDOM steps stack =
+          use List ++
+          if idx Nat.>= totalDeltas then (graftPending stack jsDOM, steps ++ rootSteps stack)
+          else
+            match List.at idx deltas with
+              None -> (graftPending stack jsDOM, steps ++ rootSteps stack)
+              Some (Resolve key node location) ->
+                target = createTarget node
+                segments = Key.segments key
+                depth = List.size segments
+                total = List.size stack
+                taken = match chainChildren depth key stack total with
+                  Some count -> count
+                  None -> countChildren depth segments stack total 0
+                kept = Nat.diff total taken
+                children = List.drop kept stack
+                _ = List.foldLeft (attachChild target) None children
+                subtree = Trie.Trie (Some target) (List.foldLeft childEntry Map.empty children)
+                prepareLoop
+                  (idx Nat.+ 1)
+                  jsDOM
+                  steps
+                  (List.take kept stack :+ PendingNode depth key target subtree location)
+              Some otherDelta ->
+                prepareLoop
+                  (idx Nat.+ 1)
+                  (graftPending stack jsDOM)
+                  ((steps ++ rootSteps stack) :+ StepDelta otherDelta)
+                  []
+        (jsDOMPrepared, preparedSteps) = prepareLoop 0 (JSState.domNodes init) [] []
+        totalPrepared = List.size preparedSteps
+        applyPrepared idx jsDOM lastRoot =
+          if idx Nat.>= totalPrepared then jsDOM
+          else
+            match List.at idx preparedSteps with
+              None -> jsDOM
+              Some (AttachTarget key target location) ->
+                match (location, lastRoot) with
+                  (After siblingKey, Some (lastKey, lastTarget)) | siblingKey === lastKey ->
+                    JSValue.invoke1_ "after" (EventTarget.object target) (EventTarget.object lastTarget)
+                  _ -> attachAt target location jsDOM
+                applyPrepared (idx Nat.+ 1) jsDOM (Some (key, target))
+              Some (StepDelta (Remove (Key (parentSegments :+ seg)) _)) ->
+                stepAt at = match List.at at preparedSteps with
+                  Some (StepDelta delta) -> Some delta
+                  _ -> None
+                (childSegments, next) = removeRun stepAt totalPrepared parentSegments (idx Nat.+ 1) [seg]
+                applyPrepared next (applyRemoves parentSegments childSegments jsDOM) None
+              Some (StepDelta otherDelta) ->
+                jsDOM' = applyNonResolve jsDOM otherDelta
+                applyPrepared (idx Nat.+ 1) jsDOM' None
+        applyPrepared 0 jsDOMPrepared None
+      else
+        applyDirect idx jsDOM =
+          if idx Nat.>= totalDeltas then jsDOM
+          else
+            match List.at idx deltas with
+              None -> jsDOM
+              Some (Remove (Key (parentSegments :+ seg)) _) ->
+                deltaAt at = List.at at deltas
+                (childSegments, next) = removeRun deltaAt totalDeltas parentSegments (idx Nat.+ 1) [seg]
+                applyDirect next (applyRemoves parentSegments childSegments jsDOM)
+              Some delta ->
+                jsDOM' = applyNonResolve jsDOM delta
+                applyDirect (idx Nat.+ 1) jsDOM'
+        applyDirect 0 (JSState.domNodes init)
+    latest = Ref.read state
+    Ref.write state (latest |> JSState.domNodes.set domNodes')
+
+ReleaseNotes : Doc
+ReleaseNotes =
+  {{
+  * This release introduces the {type Root} type, with corresponding
+    {Root.create}, {Root.render} and {Root.destroy} functions for explicit
+    lifecycle management.
+  * 2026-10-29: mounting and removing many nodes does less work. A new
+    subtree's nodes are attached to their parents as they are created, and the
+    subtree joins the index of live nodes in one step instead of one walk from
+    the root per node. Removing every child of an element clears it in one
+    step. Creating 1,000 rows of the js-framework-benchmark table takes about
+    an eighth less time, appending 1,000 a fifth less, and clearing 2,000
+    about two fifths less.
+  }}

@@ -1,0 +1,482 @@
+{
+  "suite": "rows",
+  "iterations": 5,
+  "at": "2026-10-29T12:47:42.444Z",
+  "load": [
+    3.29,
+    2.71,
+    2.64
+  ],
+  "cpus": 24,
+  "chromium": "149.0.7827.114",
+  "results": {
+    "leptos": {
+      "load (ready)": {
+        "median": 23.6,
+        "min": 21.8,
+        "max": 27.8
+      },
+      "create 1k dom": {
+        "median": 25.7,
+        "min": 23.9,
+        "max": 28.3
+      },
+      "create 1k frame": {
+        "median": 64,
+        "min": 59.5,
+        "max": 67.9
+      },
+      "update every 10th dom": {
+        "median": 0.8,
+        "min": 0.7,
+        "max": 1
+      },
+      "update every 10th frame": {
+        "median": 5.4,
+        "min": 4.7,
+        "max": 6.4
+      },
+      "select row dom": {
+        "median": 0.6,
+        "min": 0.5,
+        "max": 0.6
+      },
+      "select row frame": {
+        "median": 10.1,
+        "min": 2.6,
+        "max": 15.6
+      },
+      "swap rows dom": {
+        "median": 0.6,
+        "min": 0.5,
+        "max": 0.6
+      },
+      "swap rows frame": {
+        "median": 18.6,
+        "min": 18.2,
+        "max": 21.4
+      },
+      "remove row dom": {
+        "median": 1,
+        "min": 0.8,
+        "max": 1.1
+      },
+      "remove row frame": {
+        "median": 18.8,
+        "min": 16.4,
+        "max": 19.5
+      },
+      "replace 1k dom": {
+        "median": 26.9,
+        "min": 24.8,
+        "max": 30.1
+      },
+      "replace 1k frame": {
+        "median": 63.2,
+        "min": 61.9,
+        "max": 68.3
+      },
+      "append 1k dom": {
+        "median": 18.7,
+        "min": 17.7,
+        "max": 22.8
+      },
+      "append 1k frame": {
+        "median": 72.7,
+        "min": 67.4,
+        "max": 79.4
+      },
+      "clear 2k dom": {
+        "median": 12,
+        "min": 10.9,
+        "max": 16
+      },
+      "clear 2k frame": {
+        "median": 14,
+        "min": 12.6,
+        "max": 18
+      },
+      "create 10k dom": {
+        "median": 169.4,
+        "min": 152.7,
+        "max": 172.7
+      },
+      "create 10k frame": {
+        "median": 576.2,
+        "min": 540.1,
+        "max": 589.2
+      },
+      "memory 10k js heap MB": {
+        "median": 9.61,
+        "min": 9.61,
+        "max": 9.61
+      },
+      "memory 10k linear memory MB": {
+        "median": 21.82,
+        "min": 21.82,
+        "max": 21.82
+      },
+      "clear 10k dom": {
+        "median": 83.2,
+        "min": 78.1,
+        "max": 88.2
+      },
+      "clear 10k frame": {
+        "median": 89.3,
+        "min": 84.1,
+        "max": 95.3
+      }
+    },
+    "warp-r4": {
+      "load (ready)": {
+        "median": 24.2,
+        "min": 17.7,
+        "max": 25.2
+      },
+      "create 1k dom": {
+        "median": 106.1,
+        "min": 104,
+        "max": 120
+      },
+      "create 1k frame": {
+        "median": 143.7,
+        "min": 140,
+        "max": 154.6
+      },
+      "update every 10th dom": {
+        "median": 6.1,
+        "min": 5.8,
+        "max": 7.1
+      },
+      "update every 10th frame": {
+        "median": 13.3,
+        "min": 12.2,
+        "max": 20.6
+      },
+      "select row dom": {
+        "median": 0.6,
+        "min": 0.5,
+        "max": 1.1
+      },
+      "select row frame": {
+        "median": 6.1,
+        "min": 4.8,
+        "max": 10.6
+      },
+      "swap rows dom": {
+        "median": 4.5,
+        "min": 4.4,
+        "max": 11.3
+      },
+      "swap rows frame": {
+        "median": 18.1,
+        "min": 17.8,
+        "max": 19.2
+      },
+      "remove row dom": {
+        "median": 5.5,
+        "min": 4.6,
+        "max": 5.8
+      },
+      "remove row frame": {
+        "median": 18.9,
+        "min": 16.4,
+        "max": 19.1
+      },
+      "replace 1k dom": {
+        "median": 105.9,
+        "min": 100.9,
+        "max": 109.9
+      },
+      "replace 1k frame": {
+        "median": 140.2,
+        "min": 136.2,
+        "max": 144.8
+      },
+      "append 1k dom": {
+        "median": 78.1,
+        "min": 70.4,
+        "max": 92.9
+      },
+      "append 1k frame": {
+        "median": 128.7,
+        "min": 118.6,
+        "max": 147.5
+      },
+      "clear 2k dom": {
+        "median": 54.4,
+        "min": 45.5,
+        "max": 65
+      },
+      "clear 2k frame": {
+        "median": 55.2,
+        "min": 46,
+        "max": 65.7
+      },
+      "create 10k dom": {
+        "median": 906.1,
+        "min": 869.9,
+        "max": 937.6
+      },
+      "create 10k frame": {
+        "median": 1306.8,
+        "min": 1276.2,
+        "max": 1321.6
+      },
+      "memory 10k js heap MB": {
+        "median": 154.27,
+        "min": 153.49,
+        "max": 162.77
+      },
+      "memory 10k linear memory MB": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "clear 10k dom": {
+        "median": 165.8,
+        "min": 161.3,
+        "max": 171.6
+      },
+      "clear 10k frame": {
+        "median": 166.6,
+        "min": 162,
+        "max": 172.4
+      }
+    },
+    "warp-r5": {
+      "load (ready)": {
+        "median": 24.9,
+        "min": 21.3,
+        "max": 27.6
+      },
+      "create 1k dom": {
+        "median": 93.4,
+        "min": 90.3,
+        "max": 95.6
+      },
+      "create 1k frame": {
+        "median": 131.6,
+        "min": 127.9,
+        "max": 136
+      },
+      "update every 10th dom": {
+        "median": 6.7,
+        "min": 5.1,
+        "max": 7.5
+      },
+      "update every 10th frame": {
+        "median": 12.6,
+        "min": 9.3,
+        "max": 24.8
+      },
+      "select row dom": {
+        "median": 0.7,
+        "min": 0.4,
+        "max": 1.9
+      },
+      "select row frame": {
+        "median": 8.2,
+        "min": 2.6,
+        "max": 11.2
+      },
+      "swap rows dom": {
+        "median": 5.5,
+        "min": 5,
+        "max": 10.2
+      },
+      "swap rows frame": {
+        "median": 18.3,
+        "min": 15.1,
+        "max": 19.5
+      },
+      "remove row dom": {
+        "median": 5.9,
+        "min": 5,
+        "max": 8.3
+      },
+      "remove row frame": {
+        "median": 19.2,
+        "min": 17.2,
+        "max": 20
+      },
+      "replace 1k dom": {
+        "median": 96,
+        "min": 88,
+        "max": 104.7
+      },
+      "replace 1k frame": {
+        "median": 136,
+        "min": 123.9,
+        "max": 139.7
+      },
+      "append 1k dom": {
+        "median": 63.4,
+        "min": 55.1,
+        "max": 65.4
+      },
+      "append 1k frame": {
+        "median": 115.9,
+        "min": 102.7,
+        "max": 122.1
+      },
+      "clear 2k dom": {
+        "median": 25.4,
+        "min": 21.7,
+        "max": 50.4
+      },
+      "clear 2k frame": {
+        "median": 26,
+        "min": 22.1,
+        "max": 55.7
+      },
+      "create 10k dom": {
+        "median": 641.9,
+        "min": 602.9,
+        "max": 679.7
+      },
+      "create 10k frame": {
+        "median": 1040.8,
+        "min": 992.7,
+        "max": 1070.3
+      },
+      "memory 10k js heap MB": {
+        "median": 142.77,
+        "min": 138.5,
+        "max": 154.7
+      },
+      "memory 10k linear memory MB": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "clear 10k dom": {
+        "median": 129.7,
+        "min": 127.7,
+        "max": 136.2
+      },
+      "clear 10k frame": {
+        "median": 130.3,
+        "min": 128.5,
+        "max": 136.8
+      }
+    },
+    "warp-r5i": {
+      "load (ready)": {
+        "median": 24,
+        "min": 22.5,
+        "max": 25.4
+      },
+      "create 1k dom": {
+        "median": 95.4,
+        "min": 86.7,
+        "max": 97.9
+      },
+      "create 1k frame": {
+        "median": 134.6,
+        "min": 122.5,
+        "max": 137.2
+      },
+      "update every 10th dom": {
+        "median": 6.4,
+        "min": 5.6,
+        "max": 7.5
+      },
+      "update every 10th frame": {
+        "median": 15.1,
+        "min": 11.8,
+        "max": 19.7
+      },
+      "select row dom": {
+        "median": 0.6,
+        "min": 0.5,
+        "max": 2.1
+      },
+      "select row frame": {
+        "median": 4.8,
+        "min": 3.1,
+        "max": 11.4
+      },
+      "swap rows dom": {
+        "median": 5.8,
+        "min": 4.1,
+        "max": 8.6
+      },
+      "swap rows frame": {
+        "median": 18.4,
+        "min": 9.9,
+        "max": 19.5
+      },
+      "remove row dom": {
+        "median": 6.5,
+        "min": 3.8,
+        "max": 8.1
+      },
+      "remove row frame": {
+        "median": 19.2,
+        "min": 17.9,
+        "max": 21.1
+      },
+      "replace 1k dom": {
+        "median": 92.9,
+        "min": 89.5,
+        "max": 96.5
+      },
+      "replace 1k frame": {
+        "median": 127.9,
+        "min": 124.2,
+        "max": 130.6
+      },
+      "append 1k dom": {
+        "median": 61,
+        "min": 54.3,
+        "max": 71
+      },
+      "append 1k frame": {
+        "median": 114.2,
+        "min": 102.2,
+        "max": 127.9
+      },
+      "clear 2k dom": {
+        "median": 22.4,
+        "min": 18.2,
+        "max": 42.2
+      },
+      "clear 2k frame": {
+        "median": 23,
+        "min": 18.5,
+        "max": 42.9
+      },
+      "create 10k dom": {
+        "median": 648.2,
+        "min": 618.9,
+        "max": 668.8
+      },
+      "create 10k frame": {
+        "median": 1048,
+        "min": 1030.5,
+        "max": 1086.8
+      },
+      "memory 10k js heap MB": {
+        "median": 138.5,
+        "min": 138.5,
+        "max": 147.93
+      },
+      "memory 10k linear memory MB": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "clear 10k dom": {
+        "median": 117.5,
+        "min": 115.5,
+        "max": 120.6
+      },
+      "clear 10k frame": {
+        "median": 118.2,
+        "min": 116.2,
+        "max": 121.4
+      }
+    }
+  }
+}

@@ -1,0 +1,38 @@
+dom.internal.render : [Message] -> Optional (IncrementalRecord (Node g) {g, Effect g}) -> '{g, Render g} () ->{g, Effect g, Stream (Delta (Node g))} IncrementalRecord (Node g) {g, Effect g}
+dom.internal.render messages previous body = reconcileWithDeltas messages previous do
+  go : Namespace -> HintPath -> '{g, Render g} a ->{g, Incremental (Node g) {g, Effect g}} a
+  go ns subkeys body =
+    handle body()
+    with cases
+      { Render.fragment newNS key body -> resume } ->
+        subkeys' = match key with
+          Some key -> Within (Any key) subkeys
+          None     -> subkeys
+        result = go newNS subkeys' body
+        go ns subkeys do resume result
+      { currentNamespace -> resume }               -> go ns subkeys do resume ns
+      { node k value body -> resume }              ->
+        compute_ (Some (Within (Any k) subkeys)) do
+          go ns Here body
+          value
+        go ns subkeys resume
+      { useCell def -> resume }                    ->
+        (CellState value _ _) = cell (Some subkeys) (buildCell def)
+        go ns subkeys do resume value
+      { result }                                   -> result
+  ignore (go HTML Here body)
+  Root
+
+app.verify.TestUI.dom.traverse : TestNode g -> '{Stream (TestNode g)} ()
+app.verify.TestUI.dom.traverse = cases
+  TestNode _ root ->
+    do
+      doTraverse : Key -> ComputeRecord (Node g) {g, Effect g} ->{Stream (TestNode g)} ()
+      doTraverse key = cases
+        record@(ComputeRecord _ _ children) ->
+          Stream.emit (TestNode key record)
+          flipped.deprecated children cases
+            ComputeChild key child  -> doTraverse key child
+            DetachedChild key child -> doTraverse key child
+            _                       -> ()
+      doTraverse Key.root root

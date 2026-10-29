@@ -1,0 +1,250 @@
+{{ The smallest benchmark UI: one button and a count, the fixed cost of the framework. }}
+bench.counter.ui : '{Render {}} ()
+bench.counter.ui = do
+  use Render text
+  (count, updateCount) = useState do 0
+  el.div [attr.id "app"] do
+    button [attr.id "inc", onClick do updateCount Nat.increment] do text "+1"
+    span [attr.id "count"] do text (Nat.toText count)
+
+type bench.rows.Row = { id : Nat, label : Text }
+
+type bench.rows.Model = { rows : [Row], nextId : Nat, seed : Nat, selected : Optional Nat }
+
+{{ The initial rows model: no rows, ids from 1, a fixed seed so both implementations draw the same labels. }}
+bench.rows.Model.initial : Model
+bench.rows.Model.initial = Model [] 1 42 None
+
+{{ One step of the linear congruential generator both benchmark implementations share. }}
+bench.rows.nextSeed : Nat -> Nat
+bench.rows.nextSeed seed =
+  use Nat * +
+  Nat.mod (seed * 1103515245 + 12345) 2147483648
+
+bench.rows.adjectives : [Text]
+bench.rows.adjectives =
+  [ "pretty", "large", "big", "small", "tall", "short", "long", "handsome", "plain", "quaint", "clean"
+  , "elegant", "easy", "angry", "crazy", "helpful", "mushy", "odd", "unsightly", "adorable", "important"
+  , "inexpensive", "cheap", "expensive", "fancy" ]
+
+bench.rows.colours : [Text]
+bench.rows.colours =
+  ["red", "yellow", "blue", "green", "pink", "brown", "purple", "brown", "white", "black", "orange"]
+
+bench.rows.nouns : [Text]
+bench.rows.nouns =
+  [ "table", "chair", "house", "bbq", "desk", "car", "pony", "cookie", "sandwich", "burger", "pizza"
+  , "mouse", "keyboard" ]
+
+{{ Draws one word from `words` with the generator, returning it and the next seed. }}
+bench.rows.pick : [Text] -> Nat -> (Text, Nat)
+bench.rows.pick words seed =
+  seed' = nextSeed seed
+  word = List.at (Nat.mod (seed' Nat./ 65536) (List.size words)) words |> Optional.getOrElse ""
+  (word, seed')
+
+{{ Appends `count` freshly labelled rows to the model, as the benchmark's create and append buttons do. }}
+bench.rows.Model.append : Nat -> Model -> Model
+bench.rows.Model.append count model =
+  use Nat + ==
+  use Text ++
+  stop = Model.nextId model + count
+  go acc nextId seed =
+    if nextId == stop then (acc, nextId, seed)
+    else
+      (adjective, seed1) = pick adjectives seed
+      (colour, seed2) = pick colours seed1
+      (noun, seed3) = pick nouns seed2
+      go (acc :+ Row nextId (adjective ++ " " ++ colour ++ " " ++ noun)) (nextId + 1) seed3
+  (rows', nextId', seed') = go (Model.rows model) (Model.nextId model) (Model.seed model)
+  Model rows' nextId' seed' (Model.selected model)
+
+{{ Replaces every row with `count` new ones. }}
+bench.rows.Model.create : Nat -> Model -> Model
+bench.rows.Model.create count model = Model.append count (Model.rows.set [] model)
+
+{{ Appends " !!!" to every tenth row's label. }}
+bench.rows.Model.updateEveryTenth : Model -> Model
+bench.rows.Model.updateEveryTenth =
+  use Nat ==
+  Model.rows.modify (List.indexed >> List.map cases
+    (row, index) | Nat.mod index 10 == 0 -> Row.label.modify (label -> label Text.++ " !!!") row
+                 | otherwise -> row)
+
+{{ Swaps the second row and the second-to-last of a thousand, as the benchmark's swap button does. }}
+bench.rows.Model.swapRows : Model -> Model
+bench.rows.Model.swapRows =
+  use Nat >
+  swap rows =
+    if List.size rows > 998 then
+      match (List.at 1 rows, List.at 998 rows) with
+        (Some second, Some secondToLast) ->
+          rows |> List.replace 1 secondToLast |> List.replace 998 second
+        _ -> rows
+    else rows
+  Model.rows.modify swap
+
+{{ Moves the last row to the front and puts one new row after it: a move, and an insertion whose predecessor has just moved, which a keyed reconcile has to place correctly. }}
+bench.rows.Model.rotateInsert : Model -> Model
+bench.rows.Model.rotateInsert model = match Model.rows model with
+  rest :+ last ->
+    withFresh = Model.append 1 (Model.rows.set [] model)
+    match Model.rows withFresh with
+      [fresh] -> Model.rows.set ([last, fresh] List.++ rest) withFresh
+      _ -> model
+  [] -> model
+
+{{ Removes the row with `rowId`. }}
+bench.rows.Model.remove : Nat -> Model -> Model
+bench.rows.Model.remove rowId = Model.rows.modify (List.filter (row -> Row.id row Nat.!= rowId))
+
+{{ One table row, keyed by its id so an unchanged row is neither recomputed nor redrawn. }}
+bench.rows.rowView : ((Model -> Model) ->{Update} ()) -> Boolean -> Row ->{Render g} ()
+bench.rows.rowView updateModel isSelected row =
+  use Render text
+  rowId = Row.id row
+  region rowId do
+    tr [class (if isSelected then "danger" else "")] do
+      td [class "col-md-1"] do text (Nat.toText rowId)
+      td [class "col-md-4"] do
+        a [class "lbl", onClick do updateModel (Model.selected.set (Some rowId))] do text (Row.label row)
+      td [class "col-md-1"] do
+        a [class "remove", onClick do updateModel (Model.remove rowId)] do text "x"
+      td [class "col-md-6"] do ()
+
+{{ A benchmark button that applies `change` to the model. }}
+bench.rows.actionButton : ((Model -> Model) ->{Update} ()) -> Text -> Text -> (Model -> Model) ->{Render g} ()
+bench.rows.actionButton updateModel buttonId label change =
+  button [attr.id buttonId, onClick do updateModel change] do Render.text label
+
+{{ A cut of the js-framework-benchmark table: create, append, update, swap, select, remove and clear. }}
+bench.rows.ui : '{Render {}} ()
+bench.rows.ui = do
+  (model, updateModel) = useState do Model.initial
+  setModel : (Model -> Model) ->{Update} ()
+  setModel change = updateModel change
+  actionButton = bench.rows.actionButton setModel
+  el.div [attr.id "app"] do
+    el.div [class "buttons"] do
+      actionButton "run" "Create 1,000 rows" (Model.create 1000)
+      actionButton "runlots" "Create 10,000 rows" (Model.create 10000)
+      actionButton "add" "Append 1,000 rows" (Model.append 1000)
+      actionButton "update" "Update every 10th row" Model.updateEveryTenth
+      actionButton "clear" "Clear" (Model.rows.set [])
+      actionButton "swaprows" "Swap rows" Model.swapRows
+      actionButton "rotate" "Rotate and insert" Model.rotateInsert
+    table [class "table"] do
+      tbody [attr.id "tbody"] do
+        selected = Model.selected model
+        Model.rows model |> List.foreach (row -> rowView setModel (selected === Some (Row.id row)) row)
+
+{{ Builds `ui` into a loader and a module that mount it on the page's body, with no providers. }}
+bench.build.app : BuildConfig -> '{Render {}} () ->{IO, Exception, Stream ProgressEvent} BuildOutput
+bench.build.app config ui =
+  warp.withProgressEvents config do
+    exposeFunction_ "main" (_ -> mount (global "document" :: "body") Provider.none ui)
+
+{{ Runs `body`, timing each warp phase it reports; returns its result, the phase marks and how many terms it emitted. }}
+bench.build.withPhaseTimes : '{g, Stream ProgressEvent} a ->{g, IO, Exception} (a, [(Text, Duration)], Nat)
+bench.build.withPhaseTimes body =
+  use Nat +
+  go marks emitted = cases
+    { result } -> (result, marks :+ ("done", Clock.monotonic()), emitted)
+    { Stream.emit event -> resume } ->
+      mark label = handle resume() with go (marks :+ (label, Clock.monotonic())) emitted
+      match event with
+        BeginTermEmit _ -> handle resume() with go marks emitted
+        EndTermEmit _ -> handle resume() with go marks (emitted + 1)
+        TermsLoaded count -> mark ("loaded:" Text.++ Nat.toText count)
+        EmittingTermsTable -> mark "termsTable"
+        EmittingDebugNames -> mark "debugNames"
+        Serializing -> mark "serializing"
+        Optimizing -> mark "optimizing"
+  handle body() with go [("start", Clock.monotonic())] 0
+
+{{ The benchmark UIs by name. }}
+bench.build.uis : Text -> Optional ('{Render {}} ())
+bench.build.uis = cases
+  "counter" -> Some bench.counter.ui
+  "rows" -> Some bench.rows.ui
+  _ -> None
+
+{{ Build configurations by name: `bare` emits no debug names, `debug` emits them with the devtools hooks; neither runs an optimizer, which the benchmark runs itself. }}
+bench.build.configs : Text -> Optional BuildConfig
+bench.build.configs = cases
+  "bare" -> Some (BuildConfig [] NoReflection false false)
+  "debug" -> Some (BuildConfig [] NoReflection true true)
+  _ -> None
+
+{{ Writes a build's module and loader under `dir` and prints each phase's milliseconds since the start as one JSON line. }}
+bench.build.report : Text -> FilePath -> (BuildOutput, [(Text, Duration)], Nat) ->{IO, Exception} ()
+bench.build.report name dir result =
+  use FilePath /
+  use Text ++
+  (output, marks, emitted) = result
+  writeFile (dir / (name ++ ".wasm")) (moduleBytes output)
+  writeFile (dir / (name ++ ".loader.js")) (loaderBytes output)
+  start = List.head marks |> Optional.map at2 |> Optional.getOrElse Duration.zero
+  phase = cases
+    (label, at) -> "\"" ++ label ++ "\":" ++ Float.toText (asMilliseconds (at Duration.- start))
+  printLine
+    ("{\"build\":\"" ++ name ++ "\",\"emitted\":" ++ Nat.toText emitted ++ ","
+      ++ Text.join "," (List.map phase marks) ++ "}")
+
+{{ `run bench.build.main <ui> <config> <outDir>`: one full warp build of a benchmark UI, timed by phase. }}
+bench.build.main : '{IO, Exception} ()
+bench.build.main = do
+  match getArgs() with
+    [uiName, configName, outDir] ->
+      match (uis uiName, configs configName) with
+        (Some ui, Some config) ->
+          report (uiName ++ "-" ++ configName) (FilePath outDir) (withPhaseTimes do app config ui)
+        _ -> printLine ("unknown ui or config: " Text.++ uiName Text.++ " " Text.++ configName)
+    _ -> printLine "usage: bench.build.main <counter|rows> <bare|debug> <outDir>"
+
+{{ Builds `ui` as a delta on `previous`: a module holding only the terms `previous` did not already emit, for a running page to load. }}
+bench.build.appIncremental : BuildOutput -> '{Render {}} () ->{IO, Exception, Stream ProgressEvent} BuildOutput
+bench.build.appIncremental previous ui =
+  incremental.withProgressEvents previous do
+    exposeFunction_ "main" (_ -> mount (global "document" :: "body") Provider.none ui)
+
+{{ `run <entry> <bare|debug> <outDir>` for a build entry made with this: one full warp build of `ui`, written as `<name>-<config>`. }}
+bench.build.run : Text -> '{Render {}} () -> '{IO, Exception} ()
+bench.build.run name ui = do
+  use Text ++
+  match getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report (name ++ "-" ++ configName) (FilePath outDir) (withPhaseTimes do app config ui)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <entry> <bare|debug> <outDir>"
+
+{{ `run <entry> <bare|debug> <outDir>` for an entry made with this: in one process, a full build of `base`, a full build of `edited`, and `edited` as a delta on `base`, each written and timed. }}
+bench.build.runIncremental : Text -> '{Render {}} () -> '{Render {}} () -> '{IO, Exception} ()
+bench.build.runIncremental name base edited = do
+  use Text ++
+  match getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config ->
+          dir = FilePath outDir
+          stem = name ++ "-" ++ configName
+          baseResult = withPhaseTimes do app config base
+          report (stem ++ "-base") dir baseResult
+          (baseOutput, _, _) = baseResult
+          report (stem ++ "-edited-full") dir (withPhaseTimes do app config edited)
+          report (stem ++ "-edited-delta") dir (withPhaseTimes do appIncremental baseOutput edited)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <entry> <bare|debug> <outDir>"
+
+bench.counter.build : '{IO, Exception} ()
+bench.counter.build = bench.build.run "counter" bench.counter.ui
+
+bench.rows.build : '{IO, Exception} ()
+bench.rows.build = bench.build.run "rows" bench.rows.ui
+
+{{ Prints `STAMP <label> <ms>` from the process's monotonic clock, so a transcript can time the steps between two stamps. }}
+bench.build.stamp : '{IO, Exception} ()
+bench.build.stamp = do
+  label = getArgs() |> List.head |> Optional.getOrElse ""
+  printLine ("STAMP " Text.++ label Text.++ " " Text.++ Float.toText (asMilliseconds Clock.monotonic()))

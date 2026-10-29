@@ -1,0 +1,216 @@
+{{ A small linear congruential generator, so the native and Wasm sides draw the same operations. }}
+tests.builtins.listFuzz.lcg : Nat -> Nat
+tests.builtins.listFuzz.lcg s = Nat.mod ((s Nat.* 1103515245) Nat.+ 12345) 2147483648
+
+tests.builtins.listFuzz.cat : [Text] -> Text
+tests.builtins.listFuzz.cat = Text.join ""
+
+tests.builtins.listFuzz.hashList : [Nat] -> Nat
+tests.builtins.listFuzz.hashList xs = List.foldLeft (acc x -> Nat.mod ((acc Nat.* 31) Nat.+ x) 1000000007) 7 xs
+
+tests.builtins.listFuzz.showList : [Nat] -> Text
+tests.builtins.listFuzz.showList xs =
+  use Nat toText
+  n = List.size xs
+  shown = Text.join "," << List.map toText
+  body =
+    if n Nat.<= 12 then shown xs
+    else tests.builtins.listFuzz.cat [shown (List.take 4 xs), "..", shown (List.drop (Nat.diff n 4) xs)]
+  tests.builtins.listFuzz.cat ["#", toText n, "[", body, "]h", toText (tests.builtins.listFuzz.hashList xs)]
+
+tests.builtins.listFuzz.ordText : Int -> Text
+tests.builtins.listFuzz.ordText = cases
+  +0 -> "EQ"
+  i | i Int.< +0 -> "LT"
+  _ -> "GT"
+
+tests.builtins.listFuzz.cmp : a -> a -> Text
+tests.builtins.listFuzz.cmp x y = tests.builtins.listFuzz.ordText (Universal.compare x y)
+
+tests.builtins.listFuzz.boolText : Boolean -> Text
+tests.builtins.listFuzz.boolText b = if b then "T" else "F"
+
+tests.builtins.listFuzz.optNat : Optional Nat -> Text
+tests.builtins.listFuzz.optNat = cases
+  Some n -> Nat.toText n
+  None -> "none"
+
+tests.builtins.listFuzz.lits : [[Nat]]
+tests.builtins.listFuzz.lits =
+  [ []
+    , []
+    , [3]
+    , [3, 10]
+    , [3, 10, 17]
+    , [3, 10, 17, 24, 31, 38, 45, 52, 59, 66, 73, 80, 87, 94, 101, 108, 115, 122, 129, 136, 143, 150, 157, 164, 171, 178, 185, 192, 199, 206, 213]
+    , [3, 10, 17, 24, 31, 38, 45, 52, 59, 66, 73, 80, 87, 94, 101, 108, 115, 122, 129, 136, 143, 150, 157, 164, 171, 178, 185, 192, 199, 206, 213, 220]
+    , [3, 10, 17, 24, 31, 38, 45, 52, 59, 66, 73, 80, 87, 94, 101, 108, 115, 122, 129, 136, 143, 150, 157, 164, 171, 178, 185, 192, 199, 206, 213, 220, 227]
+    , [3, 10, 17, 24, 31, 38, 45, 52, 59, 66, 73, 80, 87, 94, 101, 108, 115, 122, 129, 136, 143, 150, 157, 164, 171, 178, 185, 192, 199, 206, 213, 220, 227, 234, 241, 248, 255, 262, 269, 276, 283, 290, 297, 304, 311, 318, 325, 332, 339, 346, 353, 360, 367, 374, 381, 388, 395, 402, 409, 416, 423, 430, 437]
+    , [3, 10, 17, 24, 31, 38, 45, 52, 59, 66, 73, 80, 87, 94, 101, 108, 115, 122, 129, 136, 143, 150, 157, 164, 171, 178, 185, 192, 199, 206, 213, 220, 227, 234, 241, 248, 255, 262, 269, 276, 283, 290, 297, 304, 311, 318, 325, 332, 339, 346, 353, 360, 367, 374, 381, 388, 395, 402, 409, 416, 423, 430, 437, 444]
+    , [3, 10, 17, 24, 31, 38, 45, 52, 59, 66, 73, 80, 87, 94, 101, 108, 115, 122, 129, 136, 143, 150, 157, 164, 171, 178, 185, 192, 199, 206, 213, 220, 227, 234, 241, 248, 255, 262, 269, 276, 283, 290, 297, 304, 311, 318, 325, 332, 339, 346, 353, 360, 367, 374, 381, 388, 395, 402, 409, 416, 423, 430, 437, 444, 451]
+    , [3, 10, 17, 24, 31, 38, 45, 52, 59, 66, 73, 80, 87, 94, 101, 108, 115, 122, 129, 136, 143, 150, 157, 164, 171, 178, 185, 192, 199, 206, 213, 220, 227, 234, 241, 248, 255, 262, 269, 276, 283, 290, 297, 304, 311, 318, 325, 332, 339, 346, 353, 360, 367, 374, 381, 388, 395, 402, 409, 416, 423, 430, 437, 444, 451, 458, 465, 472, 479, 486, 493, 500, 507, 514, 521, 528, 535, 542, 549, 556, 563, 570, 577, 584, 591, 598, 605, 612, 619, 626, 633, 640, 647, 654, 661, 668, 675]
+    , [3, 10, 17, 24, 31, 38, 45, 52, 59, 66, 73, 80, 87, 94, 101, 108, 115, 122, 129, 136, 143, 150, 157, 164, 171, 178, 185, 192, 199, 206, 213, 220, 227, 234, 241, 248, 255, 262, 269, 276, 283, 290, 297, 304, 311, 318, 325, 332, 339, 346, 353, 360, 367, 374, 381, 388, 395, 402, 409, 416, 423, 430, 437, 444, 451, 458, 465, 472, 479, 486, 493, 500, 507, 514, 521, 528, 535, 542, 549, 556, 563, 570, 577, 584, 591, 598, 605, 612, 619, 626, 633, 640, 647, 654, 661, 668, 675, 682, 689, 696, 703, 710, 717, 724, 731, 738, 745, 752, 759, 766, 773, 780, 787, 794, 801, 808, 815, 822, 829, 836, 843, 850, 857, 864, 871, 878, 885, 892, 899, 906]
+  ]
+
+tests.builtins.listFuzz.drain : Nat -> [Nat] -> ([Nat], Nat)
+tests.builtins.listFuzz.drain k xs =
+  use Nat + ==
+  go i acc = cases
+    h +: t | i Nat.< k -> go (i + 1) (acc + h) t
+    rest -> (rest, acc)
+  go 0 0 xs
+
+tests.builtins.listFuzz.drainR : Nat -> [Nat] -> ([Nat], Nat)
+tests.builtins.listFuzz.drainR k xs =
+  use Nat +
+  go i acc = cases
+    t :+ h | i Nat.< k -> go (i + 1) (acc + h) t
+    rest -> (rest, acc)
+  go 0 0 xs
+
+{{ One list operation, picked by `op`: building (cons, snoc, append, ranges, fills, literals of 0 to 130 elements), slicing (take, drop, slice, splitAt, halve, viewl and viewr patterns), transforming (map, filter, folds, sort, zip, replace, insertAt, deleteAt), comparing (`Universal.compare` and `==` on lists built different ways, nested in lists, tuples, `Optional` and `Any`, and as `Map` keys), and converting through `Text`, `Bytes` and `Pattern` captures. }}
+tests.builtins.listFuzz.step : Nat -> [Nat] -> [Nat] -> Nat ->{Exception} ([Nat], Text)
+tests.builtins.listFuzz.step op a b r =
+  use Nat + mod toText ==
+  use List +: :+
+  use tests.builtins.listFuzz cat cmp boolText optNat
+  na = List.size a
+  match op with
+    0 -> (r +: a, "cons")
+    1 -> (a :+ r, "snoc")
+    2 -> (a List.++ b, "append")
+    3 ->
+      n = mod r (na + 4)
+      (List.take n a, cat ["take ", toText n])
+    4 ->
+      n = mod r (na + 4)
+      (List.drop n a, cat ["drop ", toText n])
+    5 ->
+      i = mod r (na + 3)
+      (a, cat ["at ", toText i, "=", optNat (List.at i a)])
+    6 -> match a with
+      h +: t -> (t, cat ["viewl ", toText h])
+      [] -> ([], "viewl empty")
+    7 -> match a with
+      t :+ h -> (t, cat ["viewr ", toText h])
+      [] -> ([], "viewr empty")
+    8 ->
+      i = mod r (na + 2)
+      j = mod (r / 13) (na + 2)
+      (List.slice i j a, cat ["slice ", toText i, " ", toText j])
+    9 -> (List.reverse a, "reverse")
+    10 -> (List.map (x -> x + 1) a, "map")
+    11 -> (List.filter (x -> mod x 3 Nat.!= 0) a, "filter")
+    12 -> (List.foldRight (x acc -> x +: acc) [] a, "foldRight")
+    13 ->
+      k = mod r (na + 1)
+      rebuilt = List.take k a List.++ List.drop k a
+      ( a
+      , cat
+          [ "cmp ", cmp a b, " eq ", boolText (a === b), " rebuilt ", boolText (rebuilt === a), cmp rebuilt a
+          , " prefix ", cmp (List.take k a) a, " nested ", cmp [a, b] [b, a], boolText ([rebuilt] === [a])
+          , " tuple ", cmp (Some rebuilt, 1) (Some a, 2), " any ", boolText (Any rebuilt === Any a)
+          ] )
+    14 ->
+      n = mod r 700
+      (Nat.range 0 n, cat ["range ", toText n])
+    15 ->
+      n = mod r 100
+      (List.fill n (mod r 9), cat ["fill ", toText n])
+    16 ->
+      idx = mod r (List.size tests.builtins.listFuzz.lits)
+      (List.at idx tests.builtins.listFuzz.lits |> Optional.getOrElse [], cat ["lit ", toText idx])
+    17 ->
+      if na == 0 then (a, "replace empty")
+      else
+        i = mod r na
+        (List.replace i 999 a, cat ["replace ", toText i])
+    18 ->
+      i = mod r (na + 1)
+      (List.insertAt i 777 a, cat ["insertAt ", toText i])
+    19 ->
+      if na == 0 then (a, "deleteAt empty")
+      else
+        i = mod r na
+        (List.deleteAt i a, cat ["deleteAt ", toText i])
+    20 ->
+      k = mod r (na + 1)
+      a2 = List.take k a List.++ List.drop k a
+      b2 = List.drop 0 b List.++ []
+      m = Map.insert a 1 (Map.insert b 2 Map.empty)
+      (a, cat ["map ", optNat (Map.get a2 m), " ", optNat (Map.get b2 m), " ", toText (Map.size m)])
+    21 ->
+      t = Text.fromCharList (List.filterMap (x -> Char.fromNat (mod x 26 + 97)) (List.take 200 a))
+      cl = Text.toCharList t
+      (List.map Char.toNat cl, cat ["text ", Text.take 20 t, " ", toText (Text.size t)])
+    22 ->
+      bs = unison_base_7_15_0.Bytes.fromList (List.map (x -> mod x 256) (List.take 300 a))
+      (unison_base_7_15_0.Bytes.toList bs, cat ["bytes ", toText (unison_base_7_15_0.Bytes.size bs)])
+    23 -> (List.sort (List.take 60 a), "sort")
+    24 ->
+      (rest, total) = tests.builtins.listFuzz.drain (mod r 50) a
+      (rest', total') = tests.builtins.listFuzz.drainR (mod (r / 7) 20) rest
+      (rest', cat ["drain ", toText total, " ", toText total'])
+    25 -> (List.map (p -> at1 p + at2 p) (List.zip a b), "zip")
+    26 ->
+      k = mod r (na + 1)
+      (left, right) = List.splitAt k a
+      (right List.++ left, cat ["splitAt ", toText k, " ", toText (List.size left)])
+    27 ->
+      t = Text.join "," (List.map toText (List.take 30 a))
+      parts = Text.split ?, t
+      caps = match Pattern.run (Pattern.capture (Pattern.many Text.patterns.digit)) t with
+        Some (cs, _) -> Text.join "|" cs
+        None -> "nomatch"
+      (List.filterMap Nat.fromText parts, cat ["split ", toText (List.size parts), " caps ", caps])
+    _ ->
+      (left, right) = List.halve a
+      (right List.++ left, cat ["halve ", toText (List.size left)])
+
+{{ Applies `steps` pseudo-random list operations ({tests.builtins.listFuzz.step}) to a pool of eight lists, starting from `seed`, and describes each result in a line of text. }}
+tests.builtins.listFuzz.trace : Nat -> Nat ->{Exception} [Text]
+tests.builtins.listFuzz.trace seed steps =
+  use Nat + mod toText ==
+  use List :+
+  use tests.builtins.listFuzz cat lcg
+  go i s pool out =
+    if i == steps then out
+    else
+      s1 = lcg s
+      s2 = lcg s1
+      s3 = lcg s2
+      s4 = lcg s3
+      op = mod (s1 / 7) 29
+      ai = mod (s2 / 3) 8
+      bi = mod (s3 / 5) 8
+      a = List.at ai pool |> Optional.getOrElse []
+      b = List.at bi pool |> Optional.getOrElse []
+      (res, line) = tests.builtins.listFuzz.step op a b (s4 / 11)
+      res' = if List.size res Nat.> 3000 then List.drop (Nat.diff (List.size res) 3000) res else res
+      pool' = List.replace ai res' pool
+      go (i + 1) s4 pool' (out :+ cat [toText i, " op", toText op, " ", line, " => ", tests.builtins.listFuzz.showList res'])
+  go 0 seed [[], [1, 2, 3], Nat.range 0 40, Nat.range 0 100, [], [], Nat.range 5 300, []] []
+
+tests.builtins.listFuzz.firstDiff : [Text] -> [Text] -> Optional (Nat, Text, Text)
+tests.builtins.listFuzz.firstDiff xs ys =
+  use Nat +
+  go i = match (List.at i xs, List.at i ys) with
+    (None, None) -> None
+    (Some x, Some y) | x Text.== y -> go (i + 1)
+    (x, y) -> Some (i, Optional.getOrElse "<end>" x, Optional.getOrElse "<end>" y)
+  go 0
+
+{{ Runs the same {tests.builtins.listFuzz.trace} natively and in Wasm, exchanges the traces over the test channel, and fails on the first line where they differ, so any list builtin that disagrees with the native runtime is caught with the operation that exposed it. }}
+tests.builtins.listFuzz : Nat -> Nat -> WasmTest
+tests.builtins.listFuzz seed steps =
+  use test ensureEqual
+  body = do
+    lines = tests.builtins.listFuzz.trace seed steps
+    sendValue (Text.join "\n" lines)
+    other = receiveValue()
+    ensureEqual None (tests.builtins.listFuzz.firstDiff lines (Text.split ?\n other))
+  wasmTestWithChannel (tests.builtins.listFuzz.cat ["list fuzz ", Nat.toText seed]) body body
+
+{{ Three {tests.builtins.listFuzz} runs of 3,000 operations each. Not part of {tests}, since it adds several seconds to the run. }}
+tests.builtins.listFuzz.suite : '{IO, Exception} [Result]
+tests.builtins.listFuzz.suite = do WasmTest.run [tests.builtins.listFuzz 42 3000, tests.builtins.listFuzz 7 3000, tests.builtins.listFuzz 1234 3000]

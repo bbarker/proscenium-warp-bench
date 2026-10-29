@@ -1,0 +1,622 @@
+{{
+`Universal.compare` for warp's output: the common cases are compared in wasm, and anything else goes to the JS implementation it replaced ({Universal_compare.jsSource}).
+
+The JS version reads each field of a GC struct through a call into wasm (`Value_getTag`, `Data_getArgs`, `Args_at`, ...), so comparing one small key cost dozens of boundary crossings, and the `Map`s and `Trie`s a UI library keys on segments and names call it constantly. Here {Universal_compare.defineCompareValues} walks Nat, Int, Boolean, Char, Text, type and term links, data and closures without leaving wasm, comparing ids and strings with the JS string builtins. Lists, bytes, arrays, foreign values, requests, continuations, code, quotes and values of two different tags still go to the JS function, so ordering is unchanged; a list's elements are compared by calling back into the exported `compareValues`, one crossing per element rather than one per field, which matters because UI keys are lists.
+}}
+internal.runtime.replacements.unison_base.Universal_compare : Replacement
+internal.runtime.replacements.unison_base.Universal_compare =
+  builder name runtime =
+    use Text ++
+    use abs ref
+    anyValueRef = Runtime.internalRef Value runtime
+    rt = import.global "runtime" "self" (global.const (ref extern))
+    jsCompare = import.func.named ("js." ++ humanReadableID name) "js" (refToWasmID name) (func.Signature.Signature [(None, ref extern), (None, anyValueRef), (None, anyValueRef)] [anyValueRef] ())
+    compareValues = Universal_compare.defineCompareValues runtime rt jsCompare
+    export.func "compareValues" compareValues
+    defDirectFunc name runtime 2 do
+      pushTag VInt
+      getDirectArg 0 runtime
+      getDirectArg 1 runtime
+      instr.call compareValues
+      i64.extendI32S()
+      struct.new (Runtime.valueType VInt runtime)
+  NativeTerm (SigDirect 2) (Some Universal_compare.jsSource) builder
+
+{{
+The wasm half of {Universal_compare}: `compareValues a b` is `-1`, `0` or `1`, and `compareArgs` compares two argument arrays the way the JS version does (pairwise, a shorter right-hand side ordering first, a shorter left-hand side as equal so far). The two are mutually recursive; the JS function `jsCompare` takes every case not handled here.
+}}
+internal.runtime.replacements.unison_base.Universal_compare.defineCompareValues : Runtime -> GlobalReference -> FuncReference ->{TypeCtx, ModuleCtx} FuncReference
+internal.runtime.replacements.unison_base.Universal_compare.defineCompareValues runtime rt jsCompare =
+  use func *
+  use local get named set tee
+  anyValueRef = Runtime.internalRef Value runtime
+  valueType = Runtime.internalType Value runtime
+  valuesType = Runtime.internalType Values runtime
+  valuesRef = Runtime.internalRef Values runtime
+  compareIds = Runtime.helper CompareIds runtime
+  compareStrings = Runtime.helper CompareStrings runtime
+  (compareValues, defCompareValues) = declare.func.named "compareValues" (param.named "a" anyValueRef * param.named "b" anyValueRef => result i32)
+  (compareArgs, defCompareArgs) = declare.func.named "compareArgs" (param.named "as" valuesRef * param.named "bs" valuesRef => result i32)
+  -- `-1`, `0` or `1` for the two values of type `ty` the given closures push, with `lt` and `gt` as the comparisons.
+  threeWay ty pushA pushB lt gt =
+    x = named "x" ty
+    y = named "y" ty
+    pushA()
+    set x
+    pushB()
+    set y
+    get x
+    get y
+    gt()
+    get x
+    get y
+    lt()
+    i32.sub()
+  -- returns from the function with the comparison on the stack when it is not zero
+  returnIfNonZero = do
+    result = named "result" i32
+    tee result
+    ifThen do
+      get result
+      return()
+  defCompareValues cases
+    (a, b) ->
+      tag = named "tag" i32
+      field vt index side = do
+        get side
+        ref.cast (Runtime.valueRef vt runtime)
+        struct.get (Runtime.valueType vt runtime) index
+      whenTag vt body =
+        get tag
+        pushTag vt
+        i32.eq()
+        ifThen do
+          body()
+          return()
+      get a
+      get b
+      ref.eq()
+      ifThen do
+        i32.const 0
+        return()
+      get a
+      struct.get valueType 0
+      tee tag
+      get b
+      struct.get valueType 0
+      i32.eq()
+      ifThen do
+        whenTag VNat do threeWay i64 (field VNat 1 a) (field VNat 1 b) i64.ltU i64.gtU
+        whenTag VInt do threeWay i64 (field VInt 1 a) (field VInt 1 b) i64.ltS i64.gtS
+        whenTag VBoolean do threeWay i32 (field VBoolean 1 a) (field VBoolean 1 b) i32.ltU i32.gtU
+        whenTag VText do
+          field VText 1 a ()
+          field VText 1 b ()
+          instr.call compareStrings
+        whenTag VChar do
+          field VChar 1 a ()
+          field VChar 1 b ()
+          instr.call compareStrings
+        whenTag VTypeLink do
+          field VTypeLink 1 a ()
+          field VTypeLink 1 b ()
+          instr.call compareIds
+        whenTag VTermLink do
+          field VTermLink 1 a ()
+          field VTermLink 1 b ()
+          instr.call compareIds
+          returnIfNonZero()
+          threeWay i32 (field VTermLink 2 a) (field VTermLink 2 b) i32.ltU i32.gtU
+        whenTag VData do
+          field VData 1 a ()
+          field VData 1 b ()
+          instr.call compareIds
+          returnIfNonZero()
+          threeWay i32 (field VData 2 a) (field VData 2 b) i32.ltU i32.gtU
+          returnIfNonZero()
+          field VData 3 a ()
+          field VData 3 b ()
+          instr.call compareArgs
+        whenTag VFunc do
+          field VFunc 1 a ()
+          field VFunc 1 b ()
+          instr.call compareIds
+        whenTag VClosure do
+          field VClosure 1 a ()
+          field VClosure 1 b ()
+          instr.call compareIds
+          returnIfNonZero()
+          field VClosure 4 a ()
+          field VClosure 4 b ()
+          instr.call compareArgs
+      global.get rt
+      get a
+      get b
+      instr.call jsCompare
+      ref.cast (Runtime.valueRef VInt runtime)
+      struct.get (Runtime.valueType VInt runtime) 1
+      i32.wrapI64()
+  defCompareArgs cases
+    (as, bs) ->
+      index = named "index" i32
+      size = named "size" i32
+      get as
+      array.len()
+      set size
+      i32.const 0
+      set index
+      instr.loop cases
+        continue ->
+          get index
+          get size
+          i32.geU()
+          ifThen do
+            i32.const 0
+            return()
+          get index
+          get bs
+          array.len()
+          i32.geU()
+          ifThen do
+            i32.const 1
+            return()
+          get as
+          get index
+          array.get valuesType
+          get bs
+          get index
+          array.get valuesType
+          instr.call compareValues
+          returnIfNonZero()
+          get index
+          i32.const 1
+          i32.add()
+          set index
+          br continue
+      unreachable()
+  compareValues
+
+{{ The JS `Universal.compare` warp shipped before {Universal_compare} moved the common cases into wasm; it still handles everything else, and compares a list's elements through the module's exported `compareValues`. }}
+internal.runtime.replacements.unison_base.Universal_compare.jsSource : Text
+internal.runtime.replacements.unison_base.Universal_compare.jsSource =
+  """
+  (() => {
+    function compareJSPrimitives(a, b) {
+      return a < b ? -1 : a > b ? 1 : 0;
+    }
+    function compareArgs(rt, as, bs) {
+      for (let i = 0, len = rt.Args_length(as); i < len; i++) {
+        let a = rt.Args_at(as, i);
+        let b = rt.Args_at(bs, i);
+        if (a == null) return -1;
+        if (b == null) return 1;
+        let cmp = compare(rt, a, b);
+        if (cmp !== 0) return cmp;
+      }
+      return 0;
+    }
+    // This is likely inconsistent with how the real runtime orders differently-typed things, which could result in problems if e.g. a `Map` with `Any` keys produced in one runtime is serialised to the other. Not going to worry about that for demo purposes, though.
+    function compare(rt, a, b) {
+      if (a === b) return 0;
+      if (!rt.Value_detect(a) || !rt.Value_detect(b)) rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Attempted to compare non-value'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+      let aTag = rt.Value_getTag(a);
+      let bTag = rt.Value_getTag(b);
+      if (!rt.js.valueTagsCompatible(rt, aTag, bTag)) return compareJSPrimitives(aTag, bTag);
+      switch (aTag) {
+        case rt.Nat_TAG.value:
+        case rt.Int_TAG.value: {
+          let aRaw = rt.Nat_getValue(a);
+          let bRaw = rt.Nat_getValue(b);
+          let aVal = aTag === rt.Nat_TAG.value ? BigInt.asUintN(64, aRaw) : BigInt.asIntN(64, aRaw);
+          let bVal = bTag === rt.Nat_TAG.value ? BigInt.asUintN(64, bRaw) : BigInt.asIntN(64, bRaw);
+          return compareJSPrimitives(aVal, bVal);
+        }
+        case rt.Float_TAG.value:
+          return compareJSPrimitives(rt.Float_getValue(a), rt.Float_getValue(b));
+        case rt.TypeLink_TAG.value:
+          return rt.compareIds(rt.TypeLink_getId(a), rt.TypeLink_getId(b));
+        case rt.TermLink_TAG.value: {
+          let idComparison = rt.compareIds(rt.TermLink_getId(a), rt.TermLink_getId(b));
+          if (idComparison !== 0) return idComparison;
+          return compareJSPrimitives(rt.TermLink_getConstructor(a), rt.TermLink_getConstructor(b));
+        }
+        case rt.Char_TAG.value:
+          return compareJSPrimitives(rt.Char_getValue(a), rt.Char_getValue(b));
+        case rt.Text_TAG.value:
+          return compareJSPrimitives(rt.Text_getValue(a), rt.Text_getValue(b));
+        case rt.Data_TAG.value: {
+          let typeComparison = rt.compareIds(rt.Data_getType(a), rt.Data_getType(b));
+          if (typeComparison !== 0) return typeComparison;
+          let constructorComparison = compareJSPrimitives(rt.Data_getConstructor(a), rt.Data_getConstructor(b));
+          if (constructorComparison !== 0) return constructorComparison;
+          return compareArgs(rt, rt.Data_getArgs(a), rt.Data_getArgs(b));
+        }
+        case rt.Request_TAG.value: {
+          let dataComparison = compare(rt, rt.Request_getData(a), rt.Request_getData(b));
+          if (dataComparison !== 0) return dataComparison;
+          return compare(rt, rt.Request_getContinue(a), rt.Request_getContinue(b));
+        }
+        case rt.Function_TAG.value:
+          return rt.compareIds(rt.Function_getId(a), rt.Function_getId(b));
+        case rt.Closure_TAG.value: {
+          let idComparison = rt.compareIds(rt.Closure_getId(a), rt.Closure_getId(b));
+          if (idComparison !== 0) return idComparison;
+          return compareArgs(rt, rt.Closure_getBound(a), rt.Closure_getBound(b));
+        }
+        case rt.Continuation_TAG.value:
+          let dataComparison = compareArgs(rt, rt.Continuation_getData(a), rt.Continuation_getData(b));
+          if (dataComparison !== 0) return dataComparison;
+          if (rt.Continuation_getImpl(a) === rt.Continuation_getImpl(b)) return 0;
+          rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unable to compare different continuations with the same carried data'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+        case rt.Quote_TAG.value:
+          return compare(rt, rt.Quote_getValue(a), rt.Quote_getValue(b));
+        case rt.Code_TAG.value:
+          return compare(rt, rt.Code_getValue(a), rt.Code_getValue(b));
+        case rt.Foreign_TAG.value: {
+          let valueA = rt.Foreign_getValue(a);
+          let valueB = rt.Foreign_getValue(b);
+          if (valueA === valueB) return 0;
+          if (valueA instanceof rt.js.JSValue && valueB instanceof rt.js.JSValue) {
+            valueA = valueA.get();
+            valueB = valueB.get();
+            if (valueA === valueB) return 0;
+            if (typeof valueA === typeof valueB) {
+              switch (typeof valueA) {
+                case 'number':
+                case 'string':
+                case 'boolean':
+                case 'bigint':
+                case 'undefined':
+                  return compareJSPrimitives(valueA, valueB);
+                default:
+                  // fallthrough
+              }
+            }
+          }
+          rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unable to compare different foreign values'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+        }
+        case rt.Boolean_TAG.value:
+          return compareJSPrimitives(rt.Boolean_getValue(a), rt.Boolean_getValue(b));
+        case rt.Array_TAG.value:
+          return compareArgs(rt.Array_getContents(a), rt.Array_getContents(b));
+        case rt.ByteArray_TAG.value: {
+          let aView = rt.ByteArray_getContents(a);
+          let bView = rt.ByteArray_getContents(b);
+          let aBytes = new Uint8Array(aView.buffer, aView.byteOffset, aView.byteLength);
+          let bBytes = new Uint8Array(bView.buffer, bView.byteOffset, bView.byteLength);
+          for (let i = 0, len = Math.max(aBytes.byteLength, bBytes.byteLength); i < len; i++) {
+            let aByte = aBytes[i];
+            let bByte = bBytes[i];
+            if (aByte == null) return -1;
+            if (bByte == null) return 1;
+            if (aByte !== bByte) return aByte < bByte ? -1 : 1;
+          }
+          return 0;
+        }
+        case rt.Bytes_TAG.value: {
+          let aBytes = rt.Bytes_getValue(a).toUint8Array();
+          let bBytes = rt.Bytes_getValue(b).toUint8Array();
+          for (let i = 0, len = Math.max(aBytes.byteLength, bBytes.byteLength); i < len; i++) {
+            let aByte = aBytes[i];
+            let bByte = bBytes[i];
+            if (aByte == null) return -1;
+            if (bByte == null) return 1;
+            if (aByte !== bByte) return aByte < bByte ? -1 : 1;
+          }
+          return 0;
+        }
+        case rt.List_TAG.value: {
+          let aList = rt.List_getValue(a);
+          let bList = rt.List_getValue(b);
+          for (let i = 0, len = Math.max(aList.size, bList.size); i < len; i++) {
+            let aEl = aList.at(i);
+            let bEl = bList.at(i);
+            if (aEl == null) return -1;
+            if (bEl == null) return 1;
+            let cmp = rt.compareValues(aEl, bEl);
+            if (cmp !== 0) return cmp;
+          }
+          return 0;
+        }
+        default:
+          rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unknown value type for comparison'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+      }
+    }
+    return (rt, a, b) => rt.Int(BigInt(compare(rt, a, b)));
+  })()
+  """
+
+{{ The JS `Universal.==` warp shipped before {Universal_eq} moved the common cases into wasm; it still handles everything else, and compares a list's elements through the module's exported `eqValues`. }}
+internal.runtime.replacements.unison_base.Universal_eq.jsSource : Text
+internal.runtime.replacements.unison_base.Universal_eq.jsSource =
+  """
+  (() => {
+    function argsEq(rt, as, bs) {
+      let aLen = as ? rt.Args_length(as) : 0;
+      let bLen = bs ? rt.Args_length(bs) : 0;
+      if (aLen != bLen) return false;
+      for (let i = 0; i < aLen; i++) {
+        if (!eq(rt, rt.Args_at(as, i), rt.Args_at(bs, i))) return false;
+      }
+      return true;
+    }
+    function eq(rt, a, b) {
+      if (a === b) return true;
+      if (!rt.Value_detect(a) || !rt.Value_detect(b)) return false;
+      let aTag = rt.Value_getTag(a);
+      let bTag = rt.Value_getTag(b);
+      if (!rt.js.valueTagsCompatible(rt, aTag, bTag)) {
+        return false;
+      }
+      switch (aTag) {
+        case rt.Nat_TAG.value:
+        case rt.Int_TAG.value:
+          return rt.Nat_getValue(a) === rt.Nat_getValue(b);
+        case rt.Float_TAG.value:
+          return rt.Float_getValue(a) === rt.Float_getValue(b);
+        case rt.TypeLink_TAG.value:
+          return rt.compareIds(rt.TypeLink_getId(a), rt.TypeLink_getId(b)) === 0;
+        case rt.TermLink_TAG.value:
+          return rt.compareIds(rt.TermLink_getId(a), rt.TermLink_getId(b)) === 0
+              && rt.TermLink_getConstructor(a) === rt.TermLink_getConstructor(b);
+        case rt.Char_TAG.value:
+          return rt.Char_getValue(a) === rt.Char_getValue(b);
+        case rt.Text_TAG.value:
+          return rt.Text_getValue(a) === rt.Text_getValue(b);
+        case rt.Data_TAG.value: {
+          if (rt.compareIds(rt.Data_getType(a), rt.Data_getType(b)) !== 0) return false;
+          if (rt.Data_getConstructor(a) !== rt.Data_getConstructor(b)) return false;
+          return argsEq(rt, rt.Data_getArgs(a), rt.Data_getArgs(b));
+        }
+        case rt.Request_TAG.value:
+          return eq(rt, rt.Request_getData(a), rt.Request_getData(b))
+              && eq(rt, rt.Request_getContinue(a), rt.Request_getContinue(b));
+        case rt.Function_TAG.value:
+        case rt.Closure_TAG.value: {
+          if (rt.compareIds(rt.Function_getId(a), rt.Function_getId(b)) !== 0) return false;
+          let aBound = aTag === rt.Closure_TAG.value ? rt.Closure_getBound(a) : null;
+          let bBound = bTag === rt.Closure_TAG.value ? rt.Closure_getBound(b) : null;
+          return argsEq(rt, aBound, bBound);
+        }
+        case rt.Continuation_TAG.value:
+          // we don't track IDs for continuations, so this may give false positives, which should really be fixed
+          return argsEq(rt, rt.Continuation_getData(a), rt.Continuation_getData(b));
+        case rt.Quote_TAG.value:
+          return eq(rt, rt.Quote_getValue(a), rt.Quote_getValue(b));
+        case rt.Foreign_TAG.value: {
+          let valueA = rt.Foreign_getValue(a);
+          let valueB = rt.Foreign_getValue(b);
+          if (valueA === valueB) return true;
+          if (valueA instanceof rt.js.JSValue && valueB instanceof rt.js.JSValue) {
+            return valueA.get() === valueB.get();
+          }
+          return false;
+        }
+        case rt.Boolean_TAG.value:
+          return rt.Boolean_getValue(a) === rt.Boolean_getValue(b);
+        case rt.Array_TAG.value: {
+          let aVals = rt.Array_getContents(a);
+          let bVals = rt.Array_getContents(b);
+          if (rt.Args_length(aVals) !== rt.Args_length(bVals)) return false;
+          for (let i = 0, len = rt.Args_length(aVals); i < len; i++) {
+            if (!eq(rt, rt.Args_at(aVals, i), rt.Args_at(bVals, i))) return false;
+          }
+          return true;
+        }
+        case rt.ByteArray_TAG.value: {
+          let aView = rt.ByteArray_getContents(a);
+          let bView = rt.ByteArray_getContents(b);
+          if (aView.byteLength !== bView.byteLength) return false;
+          let aBytes = new Uint8Array(aView.buffer, aView.byteOffset, aView.byteLength);
+          let bBytes = new Uint8Array(bView.buffer, bView.byteOffset, bView.byteLength);
+          for (let i = 0, len = aBytes.byteLength; i < len; i++) {
+            if (aBytes[i] !== bBytes[i]) return false;
+          }
+          return true;
+        }
+        case rt.Bytes_TAG.value: {
+          if (rt.Bytes_getValue(a).size !== rt.Bytes_getValue(b).size) return false;
+          let aBytes = rt.Bytes_getValue(a).toUint8Array();
+          let bBytes = rt.Bytes_getValue(b).toUint8Array();
+          for (let i = 0, len = aBytes.byteLength; i < len; i++) {
+            if (aBytes[i] !== bBytes[i]) return false;
+          }
+          return true;
+        }
+        case rt.List_TAG.value: {
+          let aList = rt.List_getValue(a);
+          let bList = rt.List_getValue(b);
+          if (aList.size !== bList.size) return false;
+          for (let i = 0, len = aList.size; i < len; i++) {
+            if (!rt.eqValues(aList.at(i), bList.at(i))) return false;
+          }
+          return true;
+        }
+        default:
+          return false;
+      }
+    }
+    return (rt, a, b) => rt.Boolean(Number(eq(rt, a, b)));
+  })()
+  """
+
+{{
+`Universal.==` for warp's output, the twin of {Universal_compare}: the common cases are compared in wasm by {Universal_eq.defineEqValues}, and anything else goes to the JS implementation it replaced ({Universal_eq.jsSource}).
+
+UI libraries lean on this one even more than on ordering: memoisation compares each region's body closure with the previous render's, and every cell compares its definition, which walks the captured values. Done in JS, each field read was a call into wasm.
+}}
+internal.runtime.replacements.unison_base.Universal_eq : Replacement
+internal.runtime.replacements.unison_base.Universal_eq =
+  builder name runtime =
+    use Text ++
+    use abs ref
+    anyValueRef = Runtime.internalRef Value runtime
+    rt = import.global "runtime" "self" (global.const (ref extern))
+    jsEq = import.func.named ("js." ++ humanReadableID name) "js" (refToWasmID name) (func.Signature.Signature [(None, ref extern), (None, anyValueRef), (None, anyValueRef)] [anyValueRef] ())
+    eqValues = Universal_eq.defineEqValues runtime rt jsEq
+    export.func "eqValues" eqValues
+    defDirectFunc name runtime 2 do
+      pushTag VBoolean
+      getDirectArg 0 runtime
+      getDirectArg 1 runtime
+      instr.call eqValues
+      struct.new (Runtime.valueType VBoolean runtime)
+  NativeTerm (SigDirect 2) (Some Universal_eq.jsSource) builder
+
+{{
+The wasm half of {Universal_eq}: `eqValues a b` is `1` when the two values are equal and `0` otherwise, and `eqArgs` compares two argument arrays (same length, every pair equal). The two are mutually recursive; the JS function `jsEq` takes every case not handled here, including two values of different tags, so `Nat` against `Int` and functions against closures keep their JS meaning.
+}}
+internal.runtime.replacements.unison_base.Universal_eq.defineEqValues : Runtime -> GlobalReference -> FuncReference ->{TypeCtx, ModuleCtx} FuncReference
+internal.runtime.replacements.unison_base.Universal_eq.defineEqValues runtime rt jsEq =
+  use func *
+  use local get named set
+  anyValueRef = Runtime.internalRef Value runtime
+  valueType = Runtime.internalType Value runtime
+  valuesType = Runtime.internalType Values runtime
+  valuesRef = Runtime.internalRef Values runtime
+  compareIds = Runtime.helper CompareIds runtime
+  stringsEqual = import.func "wasm:js-string" "equals" (param externref * param externref => result i32)
+  (eqValues, defEqValues) = declare.func.named "eqValues" (param.named "a" anyValueRef * param.named "b" anyValueRef => result i32)
+  (eqArgs, defEqArgs) = declare.func.named "eqArgs" (param.named "as" valuesRef * param.named "bs" valuesRef => result i32)
+  -- returns 0 from the function when the condition on the stack is false
+  returnIfFalse = do
+    i32.eqz()
+    ifThen do
+      i32.const 0
+      return()
+  defEqValues cases
+    (a, b) ->
+      tag = named "tag" i32
+      field vt index side = do
+        get side
+        ref.cast (Runtime.valueRef vt runtime)
+        struct.get (Runtime.valueType vt runtime) index
+      whenTag vt body =
+        get tag
+        pushTag vt
+        i32.eq()
+        ifThen do
+          body()
+          return()
+      get a
+      get b
+      ref.eq()
+      ifThen do
+        i32.const 1
+        return()
+      get a
+      struct.get valueType 0
+      local.tee tag
+      get b
+      struct.get valueType 0
+      i32.eq()
+      ifThen do
+        whenTag VNat do
+          field VNat 1 a ()
+          field VNat 1 b ()
+          i64.eq()
+        whenTag VInt do
+          field VInt 1 a ()
+          field VInt 1 b ()
+          i64.eq()
+        whenTag VFloat do
+          field VFloat 1 a ()
+          field VFloat 1 b ()
+          f64.eq()
+        whenTag VBoolean do
+          field VBoolean 1 a ()
+          field VBoolean 1 b ()
+          i32.eq()
+        whenTag VText do
+          field VText 1 a ()
+          field VText 1 b ()
+          instr.call stringsEqual
+        whenTag VChar do
+          field VChar 1 a ()
+          field VChar 1 b ()
+          instr.call stringsEqual
+        whenTag VTypeLink do
+          field VTypeLink 1 a ()
+          field VTypeLink 1 b ()
+          instr.call compareIds
+          i32.eqz()
+        whenTag VTermLink do
+          field VTermLink 1 a ()
+          field VTermLink 1 b ()
+          instr.call compareIds
+          i32.eqz()
+          returnIfFalse()
+          field VTermLink 2 a ()
+          field VTermLink 2 b ()
+          i32.eq()
+        whenTag VData do
+          field VData 2 a ()
+          field VData 2 b ()
+          i32.eq()
+          returnIfFalse()
+          field VData 1 a ()
+          field VData 1 b ()
+          instr.call compareIds
+          i32.eqz()
+          returnIfFalse()
+          field VData 3 a ()
+          field VData 3 b ()
+          instr.call eqArgs
+        whenTag VFunc do
+          field VFunc 1 a ()
+          field VFunc 1 b ()
+          instr.call compareIds
+          i32.eqz()
+        whenTag VClosure do
+          field VClosure 1 a ()
+          field VClosure 1 b ()
+          instr.call compareIds
+          i32.eqz()
+          returnIfFalse()
+          field VClosure 4 a ()
+          field VClosure 4 b ()
+          instr.call eqArgs
+      global.get rt
+      get a
+      get b
+      instr.call jsEq
+      ref.cast (Runtime.valueRef VBoolean runtime)
+      struct.get (Runtime.valueType VBoolean runtime) 1
+  defEqArgs cases
+    (as, bs) ->
+      index = named "index" i32
+      size = named "size" i32
+      get as
+      array.len()
+      local.tee size
+      get bs
+      array.len()
+      i32.ne()
+      ifThen do
+        i32.const 0
+        return()
+      i32.const 0
+      set index
+      instr.loop cases
+        continue ->
+          get index
+          get size
+          i32.geU()
+          ifThen do
+            i32.const 1
+            return()
+          get as
+          get index
+          array.get valuesType
+          get bs
+          get index
+          array.get valuesType
+          instr.call eqValues
+          returnIfFalse()
+          get index
+          i32.const 1
+          i32.add()
+          set index
+          br continue
+      unreachable()
+  eqValues

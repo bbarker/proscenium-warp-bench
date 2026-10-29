@@ -1,0 +1,335 @@
+{{ The segment that tells a child apart from its siblings: every child's key is its parent's segments plus one more, so siblings can be compared, looked up and ordered by this alone, without walking their shared ancestry. }}
+Incremental.reconcile.siblingSegment : Key -> Optional Key.Segment
+Incremental.reconcile.siblingSegment = cases Key segments -> List.last segments
+
+structural type Incremental.reconcile.PreviousChildren a g = PreviousChildren (Map (Optional Key.Segment) (IncrementalNode a g))
+
+Incremental.reconcile.PreviousChildren.of : Optional (ComputeRecord a g) -> PreviousChildren a g
+Incremental.reconcile.PreviousChildren.of previous =
+  entry node = (siblingSegment (IncrementalNode.key node), node)
+  previous
+    |> Optional.map (ComputeRecord.children >> List.map entry >> Map.fromList)
+    |> Optional.getOrElse Map.empty
+    |> PreviousChildren
+
+Incremental.reconcile.PreviousChildren.lookup : Key -> PreviousChildren a g -> Optional (IncrementalNode a g)
+Incremental.reconcile.PreviousChildren.lookup key = cases PreviousChildren map -> Map.get (siblingSegment key) map
+
+{{
+For each entry, whether it belongs to a longest strictly increasing run of the present positions (patience sorting, `O(n log n)`). Entries that are {None} are never in the run.
+
+Children whose old positions form such a run are already in the right order relative to each other, so they can stay where they are while every other child moves around them: that is the fewest moves that reorder the list.
+}}
+Incremental.reconcile.stableIndices : [Optional Nat] -> [Boolean]
+Incremental.reconcile.stableIndices positions =
+  use List size +: :+
+  use Nat + < ==
+  present = positions |> List.indexed |> List.filterMap cases
+    (Some position, index) -> Some (index, position)
+    (None, _) -> None
+  valueAt index = List.at index present |> Optional.map at2 |> Optional.getOrElse 0
+  search tails value low high =
+    if low < high then
+      middle = (low + high) / 2
+      if valueAt (List.at middle tails |> Optional.getOrElse 0) < value then search tails value (middle + 1) high
+      else search tails value low middle
+    else low
+  build index tails predecessors =
+    if index == size present then (tails, predecessors)
+    else
+      value = valueAt index
+      slot = search tails value 0 (size tails)
+      predecessor = if slot == 0 then None else List.at slot (0 +: tails)
+      tails' = if slot == size tails then tails :+ index else List.replace slot index tails
+      build (index + 1) tails' (predecessors :+ predecessor)
+  (tails, predecessors) = build 0 [] []
+  members acc = cases
+    None -> acc
+    Some index -> members (index +: acc) (List.at index predecessors |> Optional.flatten)
+  stableEntries = members [] (List.last tails) |> List.filterMap (index -> List.at index present |> Optional.map at1)
+  mark index remaining acc =
+    if index == size positions then acc
+    else match remaining with
+      next +: rest | next == index -> mark (index + 1) rest (acc :+ true)
+      _ -> mark (index + 1) remaining (acc :+ false)
+  mark 0 stableEntries []
+
+{{
+Emits the {Remove}s and {Relocate}s that turn the previous order of a computation's children into the new one.
+
+The common prefix stays put; children that are gone are removed; of the rest, those whose old positions form a longest increasing run ({stableIndices}) stay put and every other existing child is relocated after its new predecessor. A new child was already placed after its predecessor when it resolved, so it moves only when that predecessor has just moved.
+
+Siblings are compared by {siblingSegment}, and the work is `O(n log n)` in the number of children after the common prefix.
+}}
+Incremental.reconcile.reconcileChildLocations : Location -> [(Key, ComputeRecord a g)] -> [(Key, ComputeRecord a g)] ->{g, Stream (Delta a)} ()
+Incremental.reconcile.reconcileChildLocations location computes computes' =
+  use Stream emit
+  use List +:
+  segmentOf = cases (key, _) -> siblingSegment key
+  skipPrefix location olds news = match (olds, news) with
+    ((key, _) +: olds', (key', _) +: news') | siblingSegment key === siblingSegment key' -> skipPrefix (After key) olds' news'
+    _ -> (location, olds, news)
+  (location', olds, news) = skipPrefix location computes computes'
+  newSegments = news |> List.map (entry -> (segmentOf entry, ())) |> Map.fromList
+  keep = cases
+    (key, compute) | Map.contains (siblingSegment key) newSegments -> true
+                   | otherwise ->
+                     emit (Remove key (ComputeRecord.result compute))
+                     cleanupCompute key compute
+                     false
+  kept = List.filter keep olds
+  oldPositions = kept |> List.indexed |> List.map (cases (entry, position) -> (segmentOf entry, position)) |> Map.fromList
+  positions = news |> List.map (entry -> Map.get (segmentOf entry) oldPositions)
+  go location previousMoved = cases
+    [] -> ()
+    ((key, _), (position, isStable)) +: rest ->
+      moves = match position with
+        Some _ -> Boolean.not isStable
+        None -> previousMoved
+      when moves do emit (Relocate key location)
+      go (After key) moves rest
+  go location' false (List.zip news (List.zip positions (stableIndices positions)))
+
+test> Incremental.reconcile.stableIndices.tests.swap =
+  check (stableIndices [Some 0, Some 3, Some 2, Some 1, Some 4] === [true, false, false, true, true] || stableIndices [Some 0, Some 3, Some 2, Some 1, Some 4] === [true, false, true, false, true] || stableIndices [Some 0, Some 3, Some 2, Some 1, Some 4] === [true, true, false, false, true])
+
+test> Incremental.reconcile.stableIndices.tests.newAndSorted =
+  check (stableIndices [None, Some 0, None, Some 1, Some 2] === [false, true, false, true, true])
+
+test> Incremental.reconcile.stableIndices.tests.reversed =
+  check (List.size (List.filter (b -> b) (stableIndices [Some 3, Some 2, Some 1, Some 0])) Nat.== 1)
+
+test> Incremental.reconcile.stableIndices.tests.empty = check (stableIndices [] === [])
+
+{{
+A given incremental computation can be broken up into subcomputations using {compute} and {compute_}. Each subcomputation will only be reevaluated if any of its inputs change from one run to the next.
+
+{compute} returns its subcomputation's result to the body that called it, so when a {type Message} reaches a cell somewhere inside, that body runs again too. {compute_} returns nothing, which is the promise that the body does not depend on the result: a message for a cell inside it is then delivered without running the enclosing bodies again, as long as they have no messages of their own and their inputs are unchanged. That is what lets a UI update one component without re-rendering its ancestors.
+
+Both accept a body and an optional tag for determining how subcomputations within the same parent should be correlated with one another across runs. Tags form a pool of related computations that are correlated against one another across runs according to their relative position to one another. Computations with no tag implicitly perform an "everything else" that functions the same way.
+}}
+ability Incremental a g where
+  cell : Optional k -> Cell s m g ->{Incremental a g} s
+  compute : Optional k -> '{g, Incremental a g} a ->{Incremental a g} a
+  compute_ : Optional k -> '{g, Incremental a g} a ->{Incremental a g} ()
+
+structural type Incremental.reconcile.IncrementalNode a g
+  = CellChild Key Any
+  | ComputeChild Key (ComputeRecord a g)
+  | DetachedChild Key (ComputeRecord a g)
+
+structural type Incremental.reconcile.ComputeRecord a g = { body : '{g, Incremental a g} a, result : a, children : [IncrementalNode a g] }
+
+Incremental.reconcile.IncrementalNode.key : IncrementalNode a g -> Key
+Incremental.reconcile.IncrementalNode.key = cases
+  CellChild key _     -> key
+  ComputeChild key _  -> key
+  DetachedChild key _ -> key
+
+Incremental.reconcile.PreviousChildren.lookupComputeRecord : Key -> PreviousChildren a g -> Optional (ComputeRecord a g)
+Incremental.reconcile.PreviousChildren.lookupComputeRecord key records = match PreviousChildren.lookup key records with
+  Some (ComputeChild _ record)  -> Some record
+  Some (DetachedChild _ record) -> Some record
+  _                             -> None
+
+Incremental.reconcile.cleanupCompute : Key -> ComputeRecord a g ->{g, Stream (Delta a)} ()
+Incremental.reconcile.cleanupCompute key = cases
+  ComputeRecord _ result children ->
+    children |> (List.foreach cases
+      CellChild _ cell         -> cleanupCell (unsafeExtract cell)
+      ComputeChild key record  -> Incremental.reconcile.cleanupCompute key record
+      DetachedChild key record -> Incremental.reconcile.cleanupCompute key record)
+
+Incremental.reconcile.reconcileChildren : Key -> [IncrementalNode a g] -> [IncrementalNode a g] ->{g, Stream (Delta a)} ()
+Incremental.reconcile.reconcileChildren key children children' =
+  use Map fromList
+  partitionChildren children =
+    partitionEithers
+      (children |> (List.map cases
+        CellChild key rec     -> Left (key, unsafeExtract rec)
+        ComputeChild key rec  -> Right (key, rec)
+        DetachedChild key rec -> Right (key, rec)))
+  (cells, computes) = partitionChildren children
+  (cells', computes') = partitionChildren children'
+  removedCells = Map.difference (fromList cells) (fromList cells') |> Map.values
+  List.foreach cleanupCell removedCells
+  reconcileChildLocations (Under key) computes computes'
+
+IncrementalRecord.lookup : Key -> IncrementalRecord a g -> Optional a
+IncrementalRecord.lookup key record =
+  use Key segments
+  target = segments key
+  (IncrementalRecord computeRecord) = record
+  visit key = cases
+    ComputeRecord _ result children ->
+      current = segments key
+      if current === target then Some result
+      else
+        if List.take (List.size current) target === current then children |> findMap go
+        else None
+  go : IncrementalNode a g -> Optional a
+  go = cases
+    CellChild _ _            -> None
+    ComputeChild key record  -> visit key record
+    DetachedChild key record -> visit key record
+  go (forCompute Key.root computeRecord)
+
+Incremental.reconcile.handler : Location -> PreviousChildren a g -> [Message] -> KeyState -> [IncrementalNode a g] -> Request {g, Incremental a g} a ->{g, Stream (Delta a)} (a, [IncrementalNode a g])
+Incremental.reconcile.handler location previousChildren messages keyState siblings = cases
+  { compute keyHint body' -> resume } ->
+    (key', keyState') = nextKey keyHint keyState
+    use List :+
+    previous = previousChildren |> lookupComputeRecord key'
+    record' = Incremental.reconcile.reconcileCompute location key' messages previous body'
+    child' = forCompute key' record'
+    handle resume (ComputeRecord.result record') with Incremental.reconcile.handler (After key') previousChildren messages keyState' (siblings :+ child')
+  { compute_ keyHint body' -> resume } ->
+    (key', keyState') = nextKey keyHint keyState
+    use List :+
+    previous = previousChildren |> lookupComputeRecord key'
+    record' = Incremental.reconcile.reconcileCompute location key' messages previous body'
+    handle resume () with Incremental.reconcile.handler (After key') previousChildren messages keyState' (siblings :+ DetachedChild key' record')
+  { cell keyHint cell' -> resume }    ->
+    (key', keyState') = nextKey keyHint keyState
+    use List :+
+    previous = previousChildren |> lookupCellRecord key'
+    (result', child') = reconcileCell key' messages previous cell'
+    handle resume result' with Incremental.reconcile.handler location previousChildren messages keyState' (siblings :+ child')
+  { value }                           -> (value, siblings)
+
+{{
+Runs one computation again, or doesn't.
+
+With no messages and an unchanged body, the previous record stands. With messages, the body runs again unless every message can be delivered below it: none is for one of its own cells, and each is under a child made with {compute_}, whose result the body never read. Then the record is kept and only those children are reconciled, so a message for a deep cell re-runs the computation that owns the cell and nothing above it.
+}}
+Incremental.reconcile.reconcileCompute : Location -> Key -> [Message] -> Optional (ComputeRecord a g) -> '{g, Incremental a g} a ->{g, Stream (Delta a)} ComputeRecord a g
+Incremental.reconcile.reconcileCompute location key allMessages previous body' =
+  use Nat + ==
+  messages = filterMessages key allMessages
+  depth = List.size (Key.segments key)
+  rerun = do
+    previousChildren = PreviousChildren.of previous
+    (value', children') = handle body'() with Incremental.reconcile.handler (Under key) previousChildren messages (enter key) []
+    match previous with
+      Some (ComputeRecord _ value children) -> when (value !== value') do Stream.emit (Update key value value')
+      _ -> Stream.emit (Resolve key value' location)
+    reconcileChildren key (previous |> Optional.map ComputeRecord.children |> Optional.getOrElse []) children'
+    ComputeRecord body' value' children'
+  ownCell = cases Message messageKey _ -> List.size (Key.segments messageKey) == depth + 1
+  group groups message = match message with
+    Message messageKey _ ->
+      use List :+
+      segment = List.at depth (Key.segments messageKey)
+      Map.insert segment ((Map.get segment groups |> Optional.getOrElse []) :+ message) groups
+  descend groups = cases
+    ComputeRecord body value children ->
+      deliverable = cases
+        DetachedChild childKey _ -> Map.get (siblingSegment childKey) groups |> Optional.map List.size |> Optional.getOrElse 0
+        _                        -> 0
+      if List.foldLeft (count child -> count + deliverable child) 0 children == List.size messages then
+        child = cases
+          DetachedChild childKey childRecord -> match Map.get (siblingSegment childKey) groups with
+            Some childMessages -> DetachedChild childKey (Incremental.reconcile.reconcileCompute (Under key) childKey childMessages (Some childRecord) (ComputeRecord.body childRecord))
+            None               -> DetachedChild childKey childRecord
+          other                              -> other
+        Some (ComputeRecord body value (List.map child children))
+      else None
+  match previous with
+    Some record | ComputeRecord.body record === body' ->
+      if List.isEmpty messages then record
+      else if List.any ownCell messages then rerun()
+      else match descend (List.foldLeft group Map.empty messages) record with
+        Some record' -> record'
+        None         -> rerun()
+    _ -> rerun()
+
+tests.detachedReconcile.counter : Cell (Nat, ((Nat -> Nat) -> Message)) (Nat -> Nat) {Log}
+tests.detachedReconcile.counter = Cell (send -> (0, send)) (s m -> Tuple.first m s) do ()
+
+{{ A message for a cell inside a {compute_} re-runs only the computation that owns the cell. }}
+tests.detachedReconcile : [Result]
+tests.detachedReconcile =
+  use Text ++
+  inner : '{Log, Incremental Nat {Log}} Nat
+  inner = do
+    Log.log "inner"
+    at1 (cell None tests.detachedReconcile.counter)
+  outer : '{Log, Incremental Nat {Log}} Nat
+  outer = do
+    Log.log "outer"
+    compute_ None inner
+    0
+  bump = Message (Key [Key.Segment.Untagged 0, Key.Segment.Untagged 0]) (Any Nat.increment)
+  trace = Log.toList do
+    first = Incremental.run outer
+    second = reconcile [bump] (Some first) outer
+    Log.log (IncrementalRecord.lookup (Key [Key.Segment.Untagged 0]) second |> Optional.map Nat.toText |> Optional.getOrElse "missing")
+  if trace === ["outer", "inner", "inner", "1"] then [Ok "only the computation owning the cell ran again"]
+  else [Fail ("unexpected evaluations: " ++ Text.join ", " trace)]
+
+{{ A message for a cell inside a {compute} still re-runs the body that reads its result. }}
+tests.attachedReconcile : [Result]
+tests.attachedReconcile =
+  use Text ++
+  inner : '{Log, Incremental Nat {Log}} Nat
+  inner = do
+    Log.log "inner"
+    at1 (cell None tests.detachedReconcile.counter)
+  outer : '{Log, Incremental Nat {Log}} Nat
+  outer = do
+    Log.log "outer"
+    compute None inner
+  bump = Message (Key [Key.Segment.Untagged 0, Key.Segment.Untagged 0]) (Any Nat.increment)
+  trace = Log.toList do
+    first = Incremental.run outer
+    second = reconcile [bump] (Some first) outer
+    Log.log (Nat.toText (IncrementalRecord.result second))
+  if trace === ["outer", "inner", "outer", "inner", "1"] then [Ok "the body reading the result ran again"]
+  else [Fail ("unexpected evaluations: " ++ Text.join ", " trace)]
+
+Incremental.reconcile.IncrementalNode.forCompute : Key -> ComputeRecord a g -> IncrementalNode a g
+Incremental.reconcile.IncrementalNode.forCompute key computeRecord = ComputeChild key computeRecord
+
+Incremental.reconcile.IncrementalNode.forCell : Key -> CellRecord s m g -> IncrementalNode a g
+Incremental.reconcile.IncrementalNode.forCell key cellRecord = CellChild key (Any cellRecord)
+
+Incremental.reconcile.PreviousChildren.lookupCellRecord : Key -> PreviousChildren a g -> Optional (CellRecord s m g)
+Incremental.reconcile.PreviousChildren.lookupCellRecord key records = match PreviousChildren.lookup key records with
+  Some (CellChild _ anyRecord) -> Some (unsafeExtract anyRecord)
+  _                            -> None
+
+Incremental.reconcile.reconcileCell : Key -> [Message] -> Optional (CellRecord s m g) -> Cell s m g ->{g} (s, IncrementalNode a g)
+Incremental.reconcile.reconcileCell key' messages previous cell' =
+  makeMessage m = Message key' (Any m)
+  value' = match previous with
+    None                         -> initFn cell' makeMessage
+    Some (CellRecord cell value) ->
+      if cell === cell' then
+        messages
+          |> (List.filter cases Message k _ -> k === key')
+          |> (List.map cases Message _ m -> v -> messageFn cell' v (unsafeExtract m))
+          |> List.foldLeft (|>) value
+      else
+        cleanupFn cell value
+        initFn cell' makeMessage
+  (value', forCell key' (CellRecord cell' value'))
+
+structural type IncrementalRecord a g = IncrementalRecord (ComputeRecord a g)
+
+IncrementalRecord.result : IncrementalRecord a g -> a
+IncrementalRecord.result = cases IncrementalRecord computeRecord -> ComputeRecord.result computeRecord
+
+Incremental.reconcileWithDeltas : [Message] -> Optional (IncrementalRecord a g) -> '{g, Incremental a g} a ->{g, Stream (Delta a)} IncrementalRecord a g
+Incremental.reconcileWithDeltas messages previous body =
+  previousComputeRecord = previous |> (Optional.map cases IncrementalRecord c -> c)
+  nextComputeRecord = Incremental.reconcile.reconcileCompute AtRoot Key.root messages previousComputeRecord body
+  IncrementalRecord nextComputeRecord
+
+Incremental.reconcile : [Message] -> Optional (IncrementalRecord a g) -> '{g, Incremental a g} a ->{g} IncrementalRecord a g
+Incremental.reconcile messages previous body = drain do Incremental.reconcileWithDeltas messages previous body
+
+Incremental.runWithDeltas : '{g, Incremental a g} a ->{g, Stream (Delta a)} IncrementalRecord a g
+Incremental.runWithDeltas body = Incremental.reconcileWithDeltas [] None body
+
+Incremental.run : '{g, Incremental a g} a ->{g} IncrementalRecord a g
+Incremental.run body = drain do Incremental.runWithDeltas body

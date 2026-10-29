@@ -1,0 +1,31 @@
+{{
+The keys a node's region nesting gives it, innermost first: what used to be a list of `Any`.
+
+Every element's computation and every cell is tagged with one of these, and the tag ends up in each key segment, so it is compared on every lookup in the reconciler's and the DOM synchroniser's maps. A list is held in JS under warp, so comparing one crosses into JS for each element; a value of this type is ordinary data and compares without leaving wasm.
+}}
+type dom.internal.HintPath = Here | Within Any HintPath
+
+dom.internal.render : [Message] -> Optional (IncrementalRecord (Node g) {g, Effect g}) -> '{g, Render g} () ->{g, Effect g, Stream (Delta (Node g))} IncrementalRecord (Node g) {g, Effect g}
+dom.internal.render messages previous body = reconcileWithDeltas messages previous do
+  go : Namespace -> HintPath -> '{g, Render g} a ->{g, Incremental (Node g) {g, Effect g}} a
+  go ns subkeys body =
+    handle body()
+    with cases
+      { Render.fragment newNS key body -> resume } ->
+        subkeys' = match key with
+          Some key -> Within (Any key) subkeys
+          None     -> subkeys
+        result = go newNS subkeys' body
+        go ns subkeys do resume result
+      { currentNamespace -> resume }               -> go ns subkeys do resume ns
+      { node k value body -> resume }              ->
+        _ = compute (Some (Within (Any k) subkeys)) do
+          go ns Here body
+          value
+        go ns subkeys resume
+      { useCell def -> resume }                    ->
+        (CellState value _ _) = cell (Some subkeys) (buildCell def)
+        go ns subkeys do resume value
+      { result }                                   -> result
+  ignore (go HTML Here body)
+  Root

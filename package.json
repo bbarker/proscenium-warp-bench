@@ -1,0 +1,7 @@
+{
+  "name": "proscenium-warp-bench",
+  "private": true,
+  "description": "Benchmark of a Unison (Proscenium and warp) front end against Leptos",
+  "type": "module",
+  "dependencies": { "playwright-core": "^1.50.0" }
+}

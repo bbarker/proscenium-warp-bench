@@ -1,0 +1,280 @@
+{{
+A unique value that marks a leaf array's unused capacity, so {internal.runtime.replacements.unison_base.List_snoc} can tell that the slot after a leaf's elements is free to write in place. No list's elements ever include it.
+}}
+internal.runtime.ListOps.emitHole : TypeIdx ->{TypeCtx, ModuleCtx} GlobalReference
+internal.runtime.ListOps.emitHole anyValueType =
+  def.global.named "seqHole" (global.const (agg.ref anyValueType)) do
+    i32.const 0
+    struct.new anyValueType
+
+{{
+Appends `elem` in place when the list's last leaf has a free slot right after its elements: the slot still holds {internal.runtime.ListOps.emitHole}'s marker, so no other list can see it. The leaf array is shared, and only the right spine is rebuilt (`seqMkBranch`), which keeps every height, so the tree stays balanced. Returns the empty list when the slot is not free.
+}}
+internal.runtime.ListOps.emitSnocInPlace :
+  TypeIdx
+  -> TypeIdx
+  -> TypeIdx
+  -> GlobalReference
+  -> GlobalReference
+  -> FuncReference
+  ->{TypeCtx, ModuleCtx} FuncReference
+internal.runtime.ListOps.emitSnocInPlace listType valuesType anyValueType holeGlobal emptyListGlobal mkBranch =
+  use func *
+  use local get named set tee
+  listRef = agg.ref listType
+  valuesRef = agg.ref valuesType
+  anyValueRef = agg.ref anyValueType
+  (snocInPlace, defSnocInPlace) =
+    declare.func.named
+      "seqSnocInPlace"
+      (param.named "seq" listRef * param.named "elem" anyValueRef => result listRef)
+  defSnocInPlace cases
+    (seq, elem) ->
+      items = named "items" valuesRef
+      slot = named "slot" i32
+      rest = named "rest" listRef
+      get seq
+      struct.get listType 2
+      i32.eqz()
+      ifThen do
+        get seq
+        struct.get listType 4
+        set items
+        get seq
+        struct.get listType 3
+        get seq
+        struct.get listType 1
+        i32.add()
+        tee slot
+        get items
+        array.len()
+        i32.ltU()
+        ifThen do
+          get items
+          get slot
+          array.get valuesType
+          global.get holeGlobal
+          ref.eq()
+          ifThen do
+            get items
+            get slot
+            get elem
+            array.set valuesType
+            pushTag VList
+            get seq
+            struct.get listType 1
+            i32.const 1
+            i32.add()
+            i32.const 0
+            get seq
+            struct.get listType 3
+            get items
+            instr.ref.null listType
+            instr.ref.null listType
+            struct.new listType
+            return()
+        global.get emptyListGlobal
+        return()
+      get seq
+      struct.get listType 6
+      ref.cast listRef
+      get elem
+      instr.call snocInPlace
+      tee rest
+      global.get emptyListGlobal
+      ref.eq()
+      ifThen do
+        global.get emptyListGlobal
+        return()
+      get seq
+      struct.get listType 5
+      ref.cast listRef
+      get rest
+      instr.call mkBranch
+  snocInPlace
+
+{{
+`List.:+` in Wasm. A leaf copied for an append gets spare capacity (up to 32 slots), marked with {internal.runtime.ListOps.emitHole}'s value, and so does the new last leaf of a tree. An append whose slot is still marked writes in place ({internal.runtime.ListOps.emitSnocInPlace}), so building a list one element at a time copies each leaf about once instead of once per element.
+}}
+internal.runtime.replacements.unison_base.List_snoc : Replacement
+internal.runtime.replacements.unison_base.List_snoc =
+  builder name runtime =
+    use array copy
+    use local get named set tee
+    anyValueRef = Runtime.internalRef InternalType.Value runtime
+    anyValueType = Runtime.internalType InternalType.Value runtime
+    valuesType = Runtime.internalType Values runtime
+    valuesRef = Runtime.internalRef Values runtime
+    listType = Runtime.valueType VList runtime
+    listRef = Runtime.valueRef VList runtime
+    (emptyValuesGlobal, emptyListGlobal) = ListOps.emitEmpty listType valuesType
+    (mkBranch, _) = ListOps.emitBalance listType emptyValuesGlobal
+    (_, seqConcat) = ListOps.emitConcat listType valuesType anyValueType emptyValuesGlobal
+    holeGlobal = ListOps.emitHole anyValueType
+    snocInPlace =
+      ListOps.emitSnocInPlace listType valuesType anyValueType holeGlobal emptyListGlobal mkBranch
+    defDirectFunc name runtime 2 do
+      seq = named "seq" listRef
+      elem = named "elem" anyValueRef
+      seqSize = named "seqSize" i32
+      dest = named "dest" valuesRef
+      cap = named "cap" i32
+      appended = named "appended" listRef
+      getDirectArg 1 runtime
+      set elem
+      getDirectArg 0 runtime
+      ref.cast listRef
+      tee seq
+      struct.get listType 1
+      tee seqSize
+      i32.eqz()
+      ifThen do
+        pushTag VList
+        i32.const 1
+        i32.const 0
+        i32.const 0
+        get elem
+        newFixed valuesType 1
+        instr.ref.null listType
+        instr.ref.null listType
+        struct.new listType
+        return()
+      get seq
+      get elem
+      instr.call snocInPlace
+      tee appended
+      global.get emptyListGlobal
+      ref.eq()
+      i32.eqz()
+      ifThen do
+        get appended
+        return()
+      get seq
+      struct.get listType 2
+      i32.eqz()
+      ifThen do
+        get seqSize
+        i32.const 32
+        i32.ltU()
+        ifThen do
+          get seqSize
+          i32.const 1
+          i32.add()
+          tee cap
+          get cap
+          i32.add()
+          set cap
+          get cap
+          i32.const 4
+          i32.ltU()
+          ifThen do
+            i32.const 4
+            set cap
+          i32.const 32
+          get cap
+          i32.ltU()
+          ifThen do
+            i32.const 32
+            set cap
+          global.get holeGlobal
+          get cap
+          array.new valuesType
+          tee dest
+          i32.const 0
+          get seq
+          struct.get listType 4
+          get seq
+          struct.get listType 3
+          get seqSize
+          copy valuesType valuesType
+          get dest
+          get seqSize
+          get elem
+          array.set valuesType
+          pushTag VList
+          get seqSize
+          i32.const 1
+          i32.add()
+          i32.const 0
+          i32.const 0
+          get dest
+          instr.ref.null listType
+          instr.ref.null listType
+          struct.new listType
+          return()
+      global.get holeGlobal
+      i32.const 32
+      array.new valuesType
+      set dest
+      get dest
+      i32.const 0
+      get elem
+      array.set valuesType
+      get seq
+      pushTag VList
+      i32.const 1
+      i32.const 0
+      i32.const 0
+      get dest
+      instr.ref.null listType
+      instr.ref.null listType
+      struct.new listType
+      emitReturnCall seqConcat
+  NativeTerm (SigDirect 2) None builder
+
+
+{{
+Appending to the same list twice, and to a prefix of a list, must not let one result see
+another's element, whether the list is one leaf or a tree: the in-place append of
+{internal.runtime.replacements.unison_base.List_snoc} may write only a slot no list has
+claimed.
+}}
+tests.builtins.listSnocSharing : WasmTest
+tests.builtins.listSnocSharing =
+  wasmTest "List :+ shares leaf capacity safely" do
+    use List :+
+    use test ensureEqual
+    small = [1, 2, 3] :+ 4
+    left = small :+ 5
+    right = small :+ 6
+    ensureEqual small [1, 2, 3, 4]
+    ensureEqual left [1, 2, 3, 4, 5]
+    ensureEqual right [1, 2, 3, 4, 6]
+    prefix = List.take 2 left
+    ensureEqual (prefix :+ 9) [1, 2, 9]
+    ensureEqual left [1, 2, 3, 4, 5]
+    ensureEqual (List.drop 1 left :+ 7) [2, 3, 4, 5, 7]
+    ensureEqual (List.drop 1 left :+ 8) [2, 3, 4, 5, 8]
+    tree = List.foldLeft (acc n -> acc :+ n) [] (Nat.range 0 70)
+    treeA = tree :+ 100
+    treeB = tree :+ 200
+    ensureEqual (List.size tree) 70
+    ensureEqual (List.at 70 treeA) (Some 100)
+    ensureEqual (List.at 70 treeB) (Some 200)
+    ensureEqual (List.at 70 tree) None
+    ensureEqual (List.drop 68 treeA) [68, 69, 100]
+    ensureEqual (List.drop 68 treeB) [68, 69, 200]
+    ensureEqual (treeA === treeB) false
+    ensureEqual tree (Nat.range 0 70)
+
+tests.builtins : [WasmTest]
+tests.builtins =
+  List.map
+    (WasmTest.group "builtins")
+    [ universal
+    , builtins.list
+    , builtins.listSnocSharing
+    , builtins.nat
+    , builtins.int
+    , builtins.float
+    , builtins.bytes
+    , builtins.char
+    , builtins.text
+    , builtins.pattern
+    , charClass
+    , textPatterns
+    , immutableByteArray
+    , mutableByteArray
+    , immutableArray
+    , mutableArray
+    ]

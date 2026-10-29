@@ -1,0 +1,81 @@
+step 0 (click #run): ok, 1000 rows
+step 1 (click #rotate): ok, 1001 rows
+step 2 (a.lbl on row 146): ok, 1001 rows
+step 3 (click #update): ok, 1001 rows
+step 4 (a.remove on row 498): ok, 1000 rows
+step 5 (a.remove on row 594): ok, 999 rows
+step 6 (click #run): ok, 1000 rows
+step 7 (click #swaprows): ok, 1000 rows
+step 8 (click #clear): ok, 0 rows
+step 9 (click #run): ok, 1000 rows
+step 10 (a.remove on row 568): ok, 999 rows
+step 11 (click #add): ok, 1999 rows
+step 12 (click #update): ok, 1999 rows
+step 13 (click #add): ok, 2999 rows
+step 14 (click #rotate): ok, 3000 rows
+step 15 (click #run): ok, 1000 rows
+step 16 (a.remove on row 413): ok, 999 rows
+step 17 (click #update): ok, 999 rows
+step 18 (a.remove on row 708): ok, 998 rows
+step 19 (click #run): ok, 1000 rows
+step 20 (click #swaprows): ok, 1000 rows
+step 21 (a.remove on row 990): ok, 999 rows
+step 22 (click #update): ok, 999 rows
+step 23 (click #add): ok, 1999 rows
+step 24 (a.lbl on row 384): ok, 1999 rows
+step 25 (a.lbl on row 302): ok, 1999 rows
+step 26 (click #swaprows): ok, 1999 rows
+step 27 (a.remove on row 468): ok, 1998 rows
+step 28 (a.remove on row 1545): ok, 1997 rows
+step 29 (a.remove on row 641): ok, 1996 rows
+step 30 (click #clear): ok, 0 rows
+step 31 (click #add): ok, 1000 rows
+step 32 (a.remove on row 205): ok, 999 rows
+step 33 (a.remove on row 396): ok, 998 rows
+step 34 (click #add): ok, 1998 rows
+step 35 (click #rotate): ok, 1999 rows
+step 36 (a.lbl on row 1053): ok, 1999 rows
+step 37 (a.lbl on row 90): ok, 1999 rows
+step 38 (a.remove on row 1788): ok, 1998 rows
+step 39 (a.remove on row 703): ok, 1997 rows
+step 40 (click #add): ok, 2997 rows
+step 41 (click #run): ok, 1000 rows
+step 42 (a.lbl on row 61): ok, 1000 rows
+step 43 (click #add): ok, 2000 rows
+step 44 (click #add): ok, 3000 rows
+step 45 (click #add): ok, 4000 rows
+step 46 (click #add): ok, 5000 rows
+step 47 (click #clear): ok, 0 rows
+step 48 (click #add): ok, 1000 rows
+step 49 (click #add): ok, 2000 rows
+step 50 (a.remove on row 1360): ok, 1999 rows
+step 51 (a.lbl on row 306): ok, 1999 rows
+step 52 (click #add): ok, 2999 rows
+step 53 (a.remove on row 2438): ok, 2998 rows
+step 54 (click #clear): ok, 0 rows
+step 55 (click #add): ok, 1000 rows
+step 56 (click #rotate): ok, 1001 rows
+step 57 (click #swaprows): ok, 1001 rows
+step 58 (a.remove on row 825): ok, 1000 rows
+step 59 (click #run): ok, 1000 rows
+step 60 (a.lbl on row 22): ok, 1000 rows
+step 61 (click #rotate): ok, 1001 rows
+step 62 (a.lbl on row 203): ok, 1001 rows
+step 63 (click #run): ok, 1000 rows
+step 64 (click #add): ok, 2000 rows
+step 65 (click #clear): ok, 0 rows
+step 66 (click #add): ok, 1000 rows
+step 67 (click #run): ok, 1000 rows
+step 68 (click #swaprows): ok, 1000 rows
+step 69 (click #swaprows): ok, 1000 rows
+step 70 (a.remove on row 594): ok, 999 rows
+step 71 (click #run): ok, 1000 rows
+step 72 (a.lbl on row 427): ok, 1000 rows
+step 73 (a.remove on row 557): ok, 999 rows
+step 74 (click #add): ok, 1999 rows
+step 75 (click #add): ok, 2999 rows
+step 76 (click #clear): ok, 0 rows
+step 77 (click #add): ok, 1000 rows
+step 78 (a.lbl on row 619): ok, 1000 rows
+step 79 (click #clear): ok, 0 rows
+CONSISTENT
