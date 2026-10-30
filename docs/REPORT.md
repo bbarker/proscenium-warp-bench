@@ -2162,6 +2162,8 @@ boundary (round 7).
     allocations, indirect calls, runtime helpers) and summarise them.
   - `totext.mjs`: times a builtin's implementations against each other in Node
     (`Nat.toText`: JS, unboxed JS, Unison, instruction DSL).
+- `docs/TailResumptive.md`: the design note for compiling a handler that resumes once, at
+  the end, as a direct call.
 - `bench/js-framework-benchmark/`: the Proscenium entry for js-framework-benchmark
   (`keyed-proscenium/`), `install.nu` to put it into a checkout, and `summary.nu` to
   tabulate a run.
@@ -2191,6 +2193,14 @@ boundary (round 7).
     `perf-r5i` (round 5's sync on ink `perf-r5`: the "Round 5" column) → `perf-r5k`
     (single-pass key counts) → `perf-r6` (on warp `perf-r5`, appends in place); the
     rows app is `bench.rowsfg` and the 400 stateful cards `bench.cards.s400i`
+  - round 7 and after, on 2026-10-30:
+    - warp `perf-r7`, `perf-r7u`, `perf-r7w`, `perf-r7-142`, the stacked offers
+      `offer-1-compare-eq` and `offer-2-list`, the standalone `offer-3-text`, and the
+      experiment `guard-one-shot`;
+    - Proscenium `perf-r7`, `bench-jfb`, `perf-r7-142`, `perf-r7-guard`, the floor
+      `perf-r7-mini` (`bench.mini`) and the prototype `perf-r7-tree` (`bench.tree`).
+
+    The README's branch tables say what each holds.
 
   The report writes branch names as `@dfreeman/<project>/<branch>`, as they were named in
   the benchmark codebase, where the projects are clones of the upstream ones. The
