@@ -26,7 +26,8 @@ the library's own terms. Each stands alone unless it says otherwise.
 
 And two directions to decide on, with the measurements below:
 - **A tree of Proscenium's own in place of ink.** A first prototype runs both rows apps
-  unchanged and is faster than ink on every operation of the fine-grained one.
+  unchanged, and the 400-card page. It beats ink on every operation of the fine-grained
+  rows app except append, where it is 5% slower.
 - **One-shot stack switching.** It would be enough for ink and Proscenium: nothing in
   them resumes a continuation twice.
 
@@ -239,12 +240,16 @@ Against that app on ink:
   - each cell now holds its value in a cell of its own and names its owner;
   - each changed owner is redrawn directly, with no dirty set.
 
-  Now it is faster on the tree in every operation (load 16–29, interleaved):
-  - update every 10th: 6.6 against 8.3 ms;
-  - select: 0.9 against 1.4;
-  - create 10,000 rows: 597 against 830.
+  Now, at load 3–4, interleaved, it is faster on the tree in every operation but append,
+  which is 5% slower:
+  - update every 10th: 4.8 against 6.0 ms;
+  - select: 0.6 on both;
+  - swap: 1.7 against 5.4;
+  - create 10,000 rows: 389 against 571.
 
-Effects and cleanups aren't in it yet, so the cards and meals apps don't run on it.
+The 400-card page runs on it too, unchanged. Its markup matches round 7's at every step,
+and it is ready in 82 ms against ink's 88. Effects and cleanups aren't in it yet, so the
+meals page doesn't run on it.
 
 ## One-shot continuations
 

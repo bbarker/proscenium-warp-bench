@@ -188,12 +188,14 @@ That app runs on it unchanged:
   cell of its own and names its owner when it is made. A message then changes the value
   in place, and the owner is redrawn directly, with no dirty set and no owner search.
   That cut update every 10th's compares to 42,048, and the fine-grained app became faster
-  on the tree than on ink in every operation: update every 10th 6.6 against 8.3 ms,
-  select 0.9 against 1.4.
+  on the tree than on ink in every operation but append (5% slower) at load 3–4:
+  update every 10th 4.8 against 6.0 ms, swap 1.7 against 5.4, create 10,000 389 against
+  571. The 400-card page runs on it too, ready in 82 ms against ink's 88.
 
 Not in the prototype yet:
-- `Effect`, `onCleanup`, namespaces, and payloads other than a click's. So the cards and
-  meals apps don't run on it.
+- `Effect`, `onCleanup`, namespaces, and payloads other than a click's. So the meals app
+  doesn't run on it. The 400-card page does, since it needs only elements, text,
+  `useState` and clicks.
 - Cells and registry entries of removed elements are not dropped.
 
 ## Open questions for the prototype

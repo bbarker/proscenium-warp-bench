@@ -423,6 +423,18 @@ bench.tree.rowsfg.build = do
         None -> printLine ("unknown config: " ++ configName)
     _ -> printLine "usage: <bare|debug> <outDir>"
 
+{{ `run bench.tree.cards.build <bare|debug> <outDir>`: the 400-card page ({bench.cards.s400i.ui}), unchanged, on {bench.tree.mount}, written as `cards-400-<config>`. }}
+bench.tree.cards.build : '{IO, Exception} ()
+bench.tree.cards.build = do
+  use Text ++
+  start _ = bench.tree.mount (global "document" :: "body") bench.cards.s400i.ui
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("cards-400-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
 ---
 
 The version with a set of changed paths and an owner search, timed as `treefg4` on 2026-10-30.

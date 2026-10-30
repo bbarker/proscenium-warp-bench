@@ -2112,10 +2112,32 @@ Timed interleaved, medians of 9, load 16–29, to the DOM
 | clear 10,000 rows | 122.1 | 149.2 | **91.5** | 88.6 | 90.8 |
 | JS heap at 10,000 rows (MB) | 9.6, plus 21.8 linear | 154.9 | 145.2 | 123.5 | **95.5** |
 
-**Round 7's own rows app is now faster on the tree than on ink in every operation, with
-the same source.** The load was high from another session's build, so the absolute times
-are inflated. The runs were interleaved, so the comparison holds. The plain app, which
-keeps everything in one root cell, gains most on creating rows.
+That run was at high load from another session's build, which inflates the times and
+evens out small differences. Run again at load 3–4 (`results/round7-tree-final-low-rows.json`):
+
+| Operation (ms) | Leptos | Fine-grained rows on ink (round 7) | **Fine-grained rows on the tree** | Plain rows on ink | **Plain rows on the tree** |
+| --- | --- | --- | --- | --- | --- |
+| create 1,000 rows | 25.3 | 81.2 | **66.0** | 74.7 | **55.0** |
+| replace 1,000 rows | 25.7 | 86.6 | **56.6** | 70.1 | **43.2** |
+| append 1,000 rows | 19.7 | **48.9** | 51.5 | 46.5 | **44.5** |
+| update every 10th row | 0.8 | 6.0 | **4.8** | 9.5 | **6.5** |
+| select a row | 0.6 | 0.6 | 0.6 | 6.5 | **3.2** |
+| swap two rows | 0.6 | 5.4 | **1.7** | 4.1 | **2.8** |
+| remove a row | 0.9 | 5.5 | **1.4** | 5.6 | **1.9** |
+| clear 2,000 rows | 11.6 | 26.9 | **11.0** | 18.8 | **15.9** |
+| create 10,000 rows | 161.5 | 570.6 | **389.4** | 461.5 | **304.8** |
+| clear 10,000 rows | 80.1 | 110.9 | **59.8** | 66.8 | **58.2** |
+
+**Round 7's own rows app, with the same source, is faster on the tree than on ink in
+every operation but append,** where it is 5% slower (51.5 against 48.9 ms). Select is
+level at 0.6 ms. Clearing 2,000 and 10,000 rows is faster than Leptos. The plain app,
+which keeps everything in one root cell, gains most on creating rows.
+
+The 400-card page runs on the tree too: it uses only elements, text, `useState` and
+clicks. Its markup matches round 7's at every step of the toggle script, and at load 3–5
+(`results/round7-tree-cards.json`):
+- **Page ready:** 82.3 ms on the tree, against 87.6 on ink and 261.1 for Leptos.
+- **Toggles:** 1.1 ms against 1.4, 0.2 against 0.4, and 0.2 against 0.2, to the DOM.
 - **The cost of registering owners** is a map entry per row, which the build of 10,000
   rows pays: its heap is 144 MB here against 94 MB for the plain app on the tree.
 
