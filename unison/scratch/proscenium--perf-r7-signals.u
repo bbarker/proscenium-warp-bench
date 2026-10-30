@@ -1,6 +1,1538 @@
 {{
 A minimal signals core, Leptos's model in Unison: a view is built once, and each piece of it that depends on a signal is an effect that updates its own DOM node when the signal changes. Nothing is diffed and no body runs again.
 
+An effect is an observer: a flag that is cleared when its owner is disposed, the number of its current run, and the body that runs it again. Subscriptions are consumed when they fire: setting a signal empties its list and runs each live observer, which subscribes again as it reads. A subscription records the run that made it, and is skipped if the observer has run since: an effect that reads two signals subscribes to both on every run, and the one that did not fire would otherwise collect a subscription per run, each running the effect again. No list of sources is kept; a stale subscription stays in a quiet signal's list until that signal changes.
+}}
+type bench.sig.Observer = SigObserver (Ref JS Boolean) (Ref JS Nat) (Ref JS bench.sig.Body)
+
+{{ An effect's body, in a box of its own: UCM's compiler applies `Ref.read` to two arguments when a function read from a `Ref` is applied directly. }}
+type bench.sig.Body = SigBody ('{JS} ())
+
+{{ A value that effects can depend on: the value, and the observers that read it since it last changed, each with the run it read it in. }}
+type bench.sig.Signal a = SigSignal (Ref JS a) (Ref JS [(bench.sig.Observer, Nat)])
+
+{{ What a piece of view owns: the effects made while building it, and what to run when it is removed. }}
+type bench.sig.Owner = SigOwner (Ref JS [bench.sig.Observer]) (Ref JS ['{JS} ()])
+
+{{ The reactive context: the owner new effects belong to, and the observer a read subscribes, if any. Passed explicitly by the core; {type bench.sig.Reactive} carries it as an ability instead. }}
+type bench.sig.Ctx = SigCtx bench.sig.Owner (Optional bench.sig.Observer)
+
+{{ Selection by key, as Solid's `createSelector` and Proscenium's `Selector` store do: an effect that asks whether its key is selected hears only about changes to that key. }}
+type bench.sig.Selector = SigSelector (Ref JS (Optional Nat)) (Ref JS (Map Nat [(bench.sig.Observer, Nat)]))
+
+ability bench.sig.Reactive where
+  context : bench.sig.Ctx
+
+{{ Runs `observer`'s body, as a new run, if its owner is still there. }}
+bench.sig.run : bench.sig.Observer ->{JS} ()
+bench.sig.run = cases
+  SigObserver alive epoch body ->
+    if Ref.read alive then
+      Ref.write epoch (Ref.read epoch Nat.+ 1)
+      match Ref.read body with SigBody thunk -> thunk()
+    else ()
+
+{{ Runs a subscription's observer if it has not run since it subscribed. }}
+bench.sig.notify : (bench.sig.Observer, Nat) ->{JS} ()
+bench.sig.notify = cases
+  (observer, at) -> match observer with
+    SigObserver _ epoch _ -> if Ref.read epoch Nat.== at then bench.sig.run observer else ()
+
+{{ A subscription of `observer` for its current run. }}
+bench.sig.subscription : bench.sig.Observer ->{JS} (bench.sig.Observer, Nat)
+bench.sig.subscription observer = match observer with
+  SigObserver _ epoch _ -> (observer, Ref.read epoch)
+
+{{ A new signal holding `value`. }}
+bench.sig.Signal.new : a ->{JS} bench.sig.Signal a
+bench.sig.Signal.new value = SigSignal (JS.ref value) (JS.ref [])
+
+{{ The signal's value, subscribing no one. }}
+bench.sig.Signal.peek : bench.sig.Signal a ->{JS} a
+bench.sig.Signal.peek = cases SigSignal cell _ -> Ref.read cell
+
+{{ Sets the signal and runs every live observer that read it since it last changed. }}
+bench.sig.Signal.set : bench.sig.Signal a -> a ->{JS} ()
+bench.sig.Signal.set signal value = match signal with
+  SigSignal cell subscribers ->
+    Ref.write cell value
+    waiting = Ref.read subscribers
+    Ref.write subscribers []
+    List.foreach bench.sig.notify waiting
+
+{{ The signal's value, subscribing the context's observer, if any. }}
+bench.sig.get : bench.sig.Ctx -> bench.sig.Signal a ->{JS} a
+bench.sig.get ctx signal = match (ctx, signal) with
+  (SigCtx _ observer, SigSignal cell subscribers) ->
+    match observer with
+      Some current -> Ref.write subscribers (bench.sig.subscription current List.+: Ref.read subscribers)
+      None -> ()
+    Ref.read cell
+
+{{ An effect owned by the context's owner: runs `body` now, and again whenever a signal it read changes, until the owner is disposed. }}
+bench.sig.effect : bench.sig.Ctx -> (bench.sig.Ctx ->{JS} ()) ->{JS} ()
+bench.sig.effect ctx body = match ctx with
+  SigCtx owner _ ->
+    bodyRef = JS.ref (SigBody do ())
+    observer = SigObserver (JS.ref true) (JS.ref 0) bodyRef
+    Ref.write bodyRef (SigBody do body (SigCtx owner (Some observer)))
+    match owner with SigOwner observers _ -> Ref.write observers (observer List.+: Ref.read observers)
+    bench.sig.run observer
+
+{{ A new owner, with no effects yet. }}
+bench.sig.Owner.new : '{JS} bench.sig.Owner
+bench.sig.Owner.new = do SigOwner (JS.ref []) (JS.ref [])
+
+{{ Stops the owner's effects and runs its cleanups. }}
+bench.sig.Owner.dispose : bench.sig.Owner ->{JS} ()
+bench.sig.Owner.dispose = cases
+  SigOwner observers cleanups ->
+    List.foreach (cases SigObserver alive _ _ -> Ref.write alive false) (Ref.read observers)
+    List.foreach (cleanup -> cleanup()) (Ref.read cleanups)
+
+{{ Runs `cleanup` when the context's owner is disposed. }}
+bench.sig.onCleanup : bench.sig.Ctx -> '{JS} () ->{JS} ()
+bench.sig.onCleanup ctx cleanup = match ctx with
+  SigCtx (SigOwner _ cleanups) _ -> Ref.write cleanups (cleanup List.+: Ref.read cleanups)
+
+{{ A selector with nothing selected. }}
+bench.sig.Selector.new : '{JS} bench.sig.Selector
+bench.sig.Selector.new = do SigSelector (JS.ref None) (JS.ref Map.empty)
+
+{{ Whether `key` is selected, subscribing the context's observer to changes of that key only. }}
+bench.sig.Selector.is : bench.sig.Ctx -> bench.sig.Selector -> Nat ->{JS} Boolean
+bench.sig.Selector.is ctx selector key = match (ctx, selector) with
+  (SigCtx _ observer, SigSelector current subscribers) ->
+    match observer with
+      Some watcher ->
+        table = Ref.read subscribers
+        Ref.write subscribers (Map.insert key (bench.sig.subscription watcher List.+: Optional.getOrElse [] (Map.get key table)) table)
+      None -> ()
+    match Ref.read current with
+      Some selected -> selected Nat.== key
+      None -> false
+
+{{ Selects `next`, running the observers of the key selected before and of `next`. }}
+bench.sig.Selector.set : bench.sig.Selector -> Optional Nat ->{JS} ()
+bench.sig.Selector.set selector next = match selector with
+  SigSelector current subscribers ->
+    previous = Ref.read current
+    Ref.write current next
+    wake = cases
+      Some key ->
+        table = Ref.read subscribers
+        match Map.get key table with
+          Some waiting ->
+            Ref.write subscribers (Map.insert key [] table)
+            List.foreach bench.sig.notify waiting
+          None -> ()
+      None -> ()
+    if previous === next then ()
+    else
+      wake previous
+      wake next
+
+{{ Drops `key`'s subscriptions, when the view that asked about it is removed. }}
+bench.sig.Selector.forget : bench.sig.Selector -> Nat ->{JS} ()
+bench.sig.Selector.forget selector key = match selector with
+  SigSelector _ subscribers -> Ref.write subscribers (Map.delete key (Ref.read subscribers))
+
+{{ An element with `attrs` and `children`. }}
+bench.sig.element : JSValue -> Text -> [(Text, Text)] -> [JSValue] ->{JS} JSValue
+bench.sig.element doc tag attrs children =
+  node = JSValue.invokeText1 "createElement" tag doc
+  List.foreach (cases (name, value) -> JSValue.invokeText2_ "setAttribute" name value node) attrs
+  List.foreach (child -> JSValue.invoke1_ "appendChild" child node) children
+  node
+
+{{ A text node. }}
+bench.sig.textNode : JSValue -> Text ->{JS} JSValue
+bench.sig.textNode doc text = JSValue.invokeText1 "createTextNode" text doc
+
+{{ Runs `action` on each click of `node`. }}
+bench.sig.onClick : JSValue -> '{JS} () ->{JS} ()
+bench.sig.onClick node action =
+  JSValue.invokeTextVal_ "addEventListener" "click" (JSValue.callback1_ (_ -> action())) node
+
+{{ A text node whose text is an effect: `compute` runs once to make it, and again to set its text whenever a signal it read changes. }}
+bench.sig.dynText : JSValue -> bench.sig.Ctx -> (bench.sig.Ctx ->{JS} Text) ->{JS} JSValue
+bench.sig.dynText doc ctx compute =
+  holder : Ref JS (Optional JSValue)
+  holder = JS.ref None
+  draw inner =
+    value = compute inner
+    match Ref.read holder with
+      None -> Ref.write holder (Some (bench.sig.textNode doc value))
+      Some node -> JSValue.setPropertyText "nodeValue" value node
+  bench.sig.effect ctx draw
+  match Ref.read holder with
+    Some node -> node
+    None -> bug "bench.sig.dynText: the effect did not run"
+
+{{ An attribute of `node` kept equal to `compute` by an effect. }}
+bench.sig.dynAttr : bench.sig.Ctx -> JSValue -> Text -> (bench.sig.Ctx ->{JS} Text) ->{JS} ()
+bench.sig.dynAttr ctx node name compute =
+  bench.sig.effect ctx (inner -> JSValue.invokeText2_ "setAttribute" name (compute inner) node)
+
+{{
+A keyed list under `parent`, as Leptos's `For` is: an effect that reads the items and brings the children in line with them. A new item is built once, under an owner of its own and untracked, so building it subscribes the list to nothing; a removed one has its owner disposed, and so does every item when the list's own owner is. A cleared list empties `parent` at once, so the list must be `parent`'s only content.
+}}
+bench.sig.each : bench.sig.Ctx -> JSValue -> (bench.sig.Ctx ->{JS} [item]) -> (item -> Nat) -> (bench.sig.Ctx -> item ->{JS} JSValue) ->{JS} ()
+bench.sig.each ctx parent items keyOf render =
+  mounted : Ref JS [(Nat, JSValue, bench.sig.Owner)]
+  mounted = JS.ref []
+  create item =
+    owner = bench.sig.Owner.new()
+    node = render (SigCtx owner None) item
+    (keyOf item, node, owner)
+  update inner =
+    news = items inner
+    Ref.write mounted (bench.sig.reconcile parent (Ref.read mounted) news keyOf create)
+  bench.sig.effect ctx update
+  disposeAll _ = List.foreach (cases (_, _, owner) -> bench.sig.Owner.dispose owner) (Ref.read mounted)
+  bench.sig.onCleanup ctx disposeAll
+
+{{
+Brings `parent`'s children, `olds`, in line with `news`, with the same fast paths as the tree's reconcile: a cleared list, a list built from empty, the common prefix and suffix kept in place, a run that only lost or only gained children, and a swap of the first and last of what is left. Anything else is reconciled by key, with ink's `stableIndices` deciding the moves.
+}}
+bench.sig.reconcile : JSValue -> [(Nat, JSValue, bench.sig.Owner)] -> [item] -> (item -> Nat) -> (item ->{JS} (Nat, JSValue, bench.sig.Owner)) ->{JS} [(Nat, JSValue, bench.sig.Owner)]
+bench.sig.reconcile parent olds news keyOf create =
+  use List :+ +: ++
+  use Nat ==
+  keyOld = cases (key, _, _) -> key
+  nodeOf = cases (_, node, _) -> node
+  drop = cases
+    (_, node, owner) ->
+      bench.sig.Owner.dispose owner
+      JSValue.invoke0_ "remove" node
+  placeAfter previous node = match previous with
+    Some before -> JSValue.invoke1_ "after" node before
+    None -> JSValue.invoke1_ "prepend" node parent
+  place previous = cases
+    [] -> ()
+    entry +: rest ->
+      placeAfter previous (nodeOf entry)
+      place (Some (nodeOf entry)) rest
+  if List.isEmpty news then
+    List.foreach (cases (_, _, owner) -> bench.sig.Owner.dispose owner) olds
+    JSValue.setPropertyText "textContent" "" parent
+    []
+  else if List.isEmpty olds then
+    created = List.map create news
+    List.foreach (entry -> JSValue.invoke1_ "appendChild" (nodeOf entry) parent) created
+    created
+  else
+    takePrefix acc olds' news' = match (olds', news') with
+      (old +: restOld, new +: restNew) | keyOld old == keyOf new -> takePrefix (acc :+ old) restOld restNew
+      _ -> (acc, olds', news')
+    takeSuffix acc olds' news' = match (olds', news') with
+      (restOld :+ old, restNew :+ new) | keyOld old == keyOf new -> takeSuffix (old +: acc) restOld restNew
+      _ -> (acc, olds', news')
+    sameKeys olds' news' = match (olds', news') with
+      (old +: restOld, new +: restNew) -> (keyOld old == keyOf new) && sameKeys restOld restNew
+      ([], []) -> true
+      _ -> false
+    (prefix, oldMiddle, newMiddle) = takePrefix [] olds news
+    (suffix, oldMiddle', newMiddle') = takeSuffix [] oldMiddle newMiddle
+    start = List.last prefix |> Optional.map nodeOf
+    middle =
+      if List.isEmpty newMiddle' then
+        List.foreach drop oldMiddle'
+        []
+      else if List.isEmpty oldMiddle' then
+        created = List.map create newMiddle'
+        place start created
+        created
+      else match (oldMiddle', newMiddle') with
+        (oldFirst +: (oldInner :+ oldLast), newFirst +: (newInner :+ newLast)) | (keyOld oldFirst == keyOf newLast) && (keyOld oldLast == keyOf newFirst) && sameKeys oldInner newInner ->
+          placeAfter start (nodeOf oldLast)
+          placeAfter (Some (List.last oldInner |> Optional.map nodeOf |> Optional.getOrElse (nodeOf oldLast))) (nodeOf oldFirst)
+          [oldLast] ++ oldInner ++ [oldFirst]
+        _ -> bench.sig.reconcileKeyed parent start oldMiddle' newMiddle' keyOf create
+    prefix ++ middle ++ suffix
+
+{{ The keyed reconcile of {bench.sig.reconcile}, for the children after `start` (the node they follow, or `None` at the start of `parent`). }}
+bench.sig.reconcileKeyed : JSValue -> Optional JSValue -> [(Nat, JSValue, bench.sig.Owner)] -> [item] -> (item -> Nat) -> (item ->{JS} (Nat, JSValue, bench.sig.Owner)) ->{JS} [(Nat, JSValue, bench.sig.Owner)]
+bench.sig.reconcileKeyed parent start olds news keyOf create =
+  use List +:
+  keyOld = cases (key, _, _) -> key
+  nodeOf = cases (_, node, _) -> node
+  oldByKey = List.indexed olds |> List.map (cases (entry, index) -> (keyOld entry, (index, entry))) |> Map.fromList
+  found = List.map (item -> Map.get (keyOf item) oldByKey) news
+  reuse = cases
+    (_, Some (_, entry)) -> entry
+    (item, None) -> create item
+  rendered = List.zip news found |> List.map reuse
+  keep = Set.fromList (List.map keyOf news)
+  dropMissing = cases
+    (key, node, owner) ->
+      if Set.contains key keep then ()
+      else
+        bench.sig.Owner.dispose owner
+        JSValue.invoke0_ "remove" node
+  List.foreach dropMissing olds
+  stable = lib.dfreeman_ink_r5.Incremental.reconcile.stableIndices (List.map (Optional.map at1) found)
+  place previous = cases
+    [] -> ()
+    (entry, isStable) +: rest ->
+      node = nodeOf entry
+      if isStable then place (Some node) rest
+      else
+        match previous with
+          Some before -> JSValue.invoke1_ "after" node before
+          None -> JSValue.invoke1_ "prepend" node parent
+        place (Some node) rest
+  place start (List.zip rendered stable)
+  rendered
+
+{{ Runs `body` with `ctx` as its {type bench.sig.Reactive} context. }}
+bench.sig.withCtx : bench.sig.Ctx -> '{g, bench.sig.Reactive} r ->{g} r
+bench.sig.withCtx ctx body =
+  handle body()
+  with cases
+    { r } -> r
+    { bench.sig.Reactive.context -> resume } -> bench.sig.withCtx ctx do resume ctx
+
+{{ {bench.sig.get}, with the context from {type bench.sig.Reactive}: one ability operation per read. }}
+bench.sig.read : bench.sig.Signal a ->{bench.sig.Reactive, JS} a
+bench.sig.read signal = bench.sig.get (bench.sig.Reactive.context) signal
+
+{{ {bench.sig.dynText} with the context from {type bench.sig.Reactive}. }}
+bench.sig.dynTextA : JSValue -> '{bench.sig.Reactive, JS} Text ->{bench.sig.Reactive, JS} JSValue
+bench.sig.dynTextA doc compute = bench.sig.dynText doc (bench.sig.Reactive.context) (ctx -> bench.sig.withCtx ctx compute)
+
+{{ {bench.sig.dynAttr} with the context from {type bench.sig.Reactive}. }}
+bench.sig.dynAttrA : JSValue -> Text -> '{bench.sig.Reactive, JS} Text ->{bench.sig.Reactive, JS} ()
+bench.sig.dynAttrA node name compute = bench.sig.dynAttr (bench.sig.Reactive.context) node name (ctx -> bench.sig.withCtx ctx compute)
+
+{{ {bench.sig.Selector.is} with the context from {type bench.sig.Reactive}. }}
+bench.sig.Selector.isA : bench.sig.Selector -> Nat ->{bench.sig.Reactive, JS} Boolean
+bench.sig.Selector.isA selector key = bench.sig.Selector.is (bench.sig.Reactive.context) selector key
+
+{{ {bench.sig.onCleanup} with the context from {type bench.sig.Reactive}. }}
+bench.sig.onCleanupA : '{JS} () ->{bench.sig.Reactive, JS} ()
+bench.sig.onCleanupA cleanup = bench.sig.onCleanup (bench.sig.Reactive.context) cleanup
+
+{{ A row of the signals rows app: its id, and its label as a signal of its own. }}
+type bench.sig.rows.SRow = SRow Nat (bench.sig.Signal Text)
+
+{{ The rows app's state: the page's `document`, the rows, the selection, and the next id and seed of the label generator {bench.rows.Model.append} shares with every other rows app. }}
+type bench.sig.rows.State = SigRowsState JSValue (bench.sig.Signal [bench.sig.rows.SRow]) bench.sig.Selector (Ref JS (Nat, Nat))
+
+bench.sig.rows.SRow.id : bench.sig.rows.SRow -> Nat
+bench.sig.rows.SRow.id = cases SRow rowId _ -> rowId
+
+bench.sig.rows.State.rows : bench.sig.rows.State -> bench.sig.Signal [bench.sig.rows.SRow]
+bench.sig.rows.State.rows = cases SigRowsState _ rowsSignal _ _ -> rowsSignal
+
+{{ `count` new rows, labelled by the same generator and in the same order as {bench.rows.Model.append}. }}
+bench.sig.rows.generate : bench.sig.rows.State -> Nat ->{JS} [bench.sig.rows.SRow]
+bench.sig.rows.generate state count = match state with
+  SigRowsState _ _ _ counters ->
+    (nextId, seed) = Ref.read counters
+    model = bench.rows.Model.append count (bench.rows.Model.Model [] nextId seed None)
+    Ref.write counters (bench.rows.Model.nextId model, bench.rows.Model.seed model)
+    List.map (cases bench.rows.Row.Row rowId label -> SRow rowId (bench.sig.Signal.new label)) (bench.rows.Model.rows model)
+
+{{ The benchmark's operations, as the other rows apps define them ({bench.rows.Model}): replace with `count` rows. }}
+bench.sig.rows.replace : bench.sig.rows.State -> Nat ->{JS} ()
+bench.sig.rows.replace state count = bench.sig.Signal.set (bench.sig.rows.State.rows state) (bench.sig.rows.generate state count)
+
+{{ Appends `count` rows. }}
+bench.sig.rows.append : bench.sig.rows.State -> Nat ->{JS} ()
+bench.sig.rows.append state count =
+  rowsSignal = bench.sig.rows.State.rows state
+  existing = bench.sig.Signal.peek rowsSignal
+  bench.sig.Signal.set rowsSignal (existing List.++ bench.sig.rows.generate state count)
+
+{{ Appends " !!!" to every tenth row's label: a set of each of those rows' label signals, and nothing else. }}
+bench.sig.rows.updateEveryTenth : bench.sig.rows.State ->{JS} ()
+bench.sig.rows.updateEveryTenth state =
+  bump = cases
+    (SRow _ label, index) ->
+      if index Nat.% 10 Nat.== 0 then bench.sig.Signal.set label (bench.sig.Signal.peek label Text.++ " !!!")
+      else ()
+  List.foreach bump (List.indexed (bench.sig.Signal.peek (bench.sig.rows.State.rows state)))
+
+{{ Swaps the second row and the second-to-last of a thousand. }}
+bench.sig.rows.swap : bench.sig.rows.State ->{JS} ()
+bench.sig.rows.swap state =
+  rowsSignal = bench.sig.rows.State.rows state
+  current = bench.sig.Signal.peek rowsSignal
+  if List.size current Nat.> 998 then
+    match (List.at 1 current, List.at 998 current) with
+      (Some second, Some secondToLast) ->
+        bench.sig.Signal.set rowsSignal (current |> List.replace 1 secondToLast |> List.replace 998 second)
+      _ -> ()
+  else ()
+
+{{ Moves the last row to the front and puts one new row after it. }}
+bench.sig.rows.rotateInsert : bench.sig.rows.State ->{JS} ()
+bench.sig.rows.rotateInsert state =
+  use List :+ ++
+  rowsSignal = bench.sig.rows.State.rows state
+  match bench.sig.Signal.peek rowsSignal with
+    rest :+ last -> bench.sig.Signal.set rowsSignal ([last] ++ bench.sig.rows.generate state 1 ++ rest)
+    [] -> ()
+
+{{ Removes the row with `rowId`. }}
+bench.sig.rows.remove : bench.sig.rows.State -> Nat ->{JS} ()
+bench.sig.rows.remove state rowId =
+  rowsSignal = bench.sig.rows.State.rows state
+  bench.sig.Signal.set rowsSignal (List.filter (row -> bench.sig.rows.SRow.id row Nat.!= rowId) (bench.sig.Signal.peek rowsSignal))
+
+{{
+One row, with the reactive context passed explicitly. Built once: its label is a text effect on the row's label signal, and its class an effect on the selector for its id. The same markup as {bench.rows.rowView}.
+}}
+bench.sig.rows.rowView : bench.sig.rows.State -> bench.sig.Ctx -> bench.sig.rows.SRow ->{JS} JSValue
+bench.sig.rows.rowView state ctx = cases
+  SRow rowId label ->
+    match state with
+      SigRowsState doc _ selection _ ->
+        use bench.sig element textNode
+        labelLink = element doc "a" [("class", "lbl")] [bench.sig.dynText doc ctx (inner -> bench.sig.get inner label)]
+        bench.sig.onClick labelLink do bench.sig.Selector.set selection (Some rowId)
+        removeLink = element doc "a" [("class", "remove")] [textNode doc "x"]
+        bench.sig.onClick removeLink do bench.sig.rows.remove state rowId
+        row =
+          element doc "tr" [] [
+            element doc "td" [("class", "col-md-1")] [textNode doc (Nat.toText rowId)],
+            element doc "td" [("class", "col-md-4")] [labelLink],
+            element doc "td" [("class", "col-md-1")] [removeLink],
+            element doc "td" [("class", "col-md-6")] []]
+        bench.sig.dynAttr ctx row "class" (inner -> if bench.sig.Selector.is inner selection rowId then "danger" else "")
+        bench.sig.onCleanup ctx do bench.sig.Selector.forget selection rowId
+        row
+
+{{ {bench.sig.rows.rowView}, with the reactive context carried by {type bench.sig.Reactive}: each read and each effect made is an ability operation. }}
+bench.sig.rows.rowViewA : bench.sig.rows.State -> bench.sig.rows.SRow ->{bench.sig.Reactive, JS} JSValue
+bench.sig.rows.rowViewA state = cases
+  SRow rowId label ->
+    match state with
+      SigRowsState doc _ selection _ ->
+        use bench.sig element textNode
+        labelLink = element doc "a" [("class", "lbl")] [bench.sig.dynTextA doc do bench.sig.read label]
+        bench.sig.onClick labelLink do bench.sig.Selector.set selection (Some rowId)
+        removeLink = element doc "a" [("class", "remove")] [textNode doc "x"]
+        bench.sig.onClick removeLink do bench.sig.rows.remove state rowId
+        row =
+          element doc "tr" [] [
+            element doc "td" [("class", "col-md-1")] [textNode doc (Nat.toText rowId)],
+            element doc "td" [("class", "col-md-4")] [labelLink],
+            element doc "td" [("class", "col-md-1")] [removeLink],
+            element doc "td" [("class", "col-md-6")] []]
+        bench.sig.dynAttrA row "class" do if bench.sig.Selector.isA selection rowId then "danger" else ""
+        bench.sig.onCleanupA do bench.sig.Selector.forget selection rowId
+        row
+
+{{
+Builds the rows app on `root`: the buttons, and the table whose body is a keyed list ({bench.sig.each}) of the rows signal. `rowView` builds a row and `readRows` reads the rows signal, each in the given context, so the explicit and the ability versions share everything else.
+}}
+bench.sig.rows.mount : (bench.sig.rows.State -> bench.sig.Ctx -> bench.sig.rows.SRow ->{JS} JSValue) -> (bench.sig.rows.State -> bench.sig.Ctx ->{JS} [bench.sig.rows.SRow]) -> JSValue ->{JS} ()
+bench.sig.rows.mount rowView readRows root =
+  use bench.sig element textNode
+  doc = global "document"
+  initial = bench.rows.Model.initial
+  state = SigRowsState doc (bench.sig.Signal.new []) (bench.sig.Selector.new()) (JS.ref (bench.rows.Model.nextId initial, bench.rows.Model.seed initial))
+  ctx = SigCtx (bench.sig.Owner.new()) None
+  button buttonId label action =
+    node = element doc "button" [("id", buttonId)] [textNode doc label]
+    bench.sig.onClick node action
+    node
+  buttons =
+    element doc "div" [("class", "buttons")] [
+      button "run" "Create 1,000 rows" do bench.sig.rows.replace state 1000,
+      button "runlots" "Create 10,000 rows" do bench.sig.rows.replace state 10000,
+      button "add" "Append 1,000 rows" do bench.sig.rows.append state 1000,
+      button "update" "Update every 10th row" do bench.sig.rows.updateEveryTenth state,
+      button "clear" "Clear" do bench.sig.Signal.set (bench.sig.rows.State.rows state) [],
+      button "swaprows" "Swap rows" do bench.sig.rows.swap state,
+      button "rotate" "Rotate and insert" do bench.sig.rows.rotateInsert state]
+  tbody = element doc "tbody" [("id", "tbody")] []
+  app = element doc "div" [("id", "app")] [buttons, element doc "table" [("class", "table")] [tbody]]
+  bench.sig.each ctx tbody (readRows state) bench.sig.rows.SRow.id (rowView state)
+  JSValue.invoke1_ "appendChild" app root
+
+{{ `run bench.sig.rows.build <bare|debug> <outDir>`: the signals rows app with the context passed explicitly, written as `rows-<config>`. }}
+bench.sig.rows.build : '{IO, Exception} ()
+bench.sig.rows.build = do
+  use Text ++
+  readRows state ctx = bench.sig.get ctx (bench.sig.rows.State.rows state)
+  start _ = bench.sig.rows.mount bench.sig.rows.rowView readRows (global "document" :: "body")
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("rows-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+{{ `run bench.sig.rowsA.build <bare|debug> <outDir>`: the signals rows app with the context carried by {type bench.sig.Reactive}, written as `rows-<config>`. }}
+bench.sig.rowsA.build : '{IO, Exception} ()
+bench.sig.rowsA.build = do
+  use Text ++
+  readRows state ctx = bench.sig.withCtx ctx do bench.sig.read (bench.sig.rows.State.rows state)
+  rowView state ctx row = bench.sig.withCtx ctx do bench.sig.rows.rowViewA state row
+  start _ = bench.sig.rows.mount rowView readRows (global "document" :: "body")
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("rows-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+{{ A derived signal: `compute` runs as an effect, and the signal it returns is set only when the value changes (`===`), so its readers hear only about real changes. }}
+bench.sig.memo : bench.sig.Ctx -> (bench.sig.Ctx ->{JS} a) ->{JS} bench.sig.Signal a
+bench.sig.memo ctx compute =
+  holder = JS.ref None
+  update inner =
+    value = compute inner
+    match Ref.read holder with
+      None -> Ref.write holder (Some (bench.sig.Signal.new value))
+      Some signal -> if bench.sig.Signal.peek signal === value then () else bench.sig.Signal.set signal value
+  bench.sig.effect ctx update
+  match Ref.read holder with
+    Some signal -> signal
+    None -> bug "bench.sig.memo: the effect did not run"
+
+{{ Content that exists while `condition` holds: built under an owner of its own when it becomes true, and put after `anchor`, or at the end of `parent`; disposed and removed when it becomes false, or when the context's owner is. }}
+bench.sig.show : bench.sig.Ctx -> JSValue -> Optional JSValue -> (bench.sig.Ctx ->{JS} Boolean) -> (bench.sig.Ctx ->{JS} [JSValue]) ->{JS} ()
+bench.sig.show ctx parent anchor condition build =
+  use List +:
+  current = JS.ref None
+  hide _ = match Ref.read current with
+    Some (owner, nodes) ->
+      bench.sig.Owner.dispose owner
+      List.foreach (node -> JSValue.invoke0_ "remove" node) nodes
+      Ref.write current None
+    None -> ()
+  insert previous = cases
+    [] -> ()
+    node +: rest ->
+      match previous with
+        Some before -> JSValue.invoke1_ "after" node before
+        None -> JSValue.invoke1_ "appendChild" node parent
+      insert (Some node) rest
+  update inner =
+    visible = condition inner
+    match (visible, Ref.read current) with
+      (true, None) ->
+        owner = bench.sig.Owner.new()
+        nodes = build (SigCtx owner None)
+        insert anchor nodes
+        Ref.write current (Some (owner, nodes))
+      (false, Some _) -> hide()
+      _ -> ()
+  bench.sig.effect ctx update
+  bench.sig.onCleanup ctx hide
+
+{{ What the meals page's views share: the `document`, the plan, the checked grocery items, and the week resolved against the catalog, a memo of the plan. }}
+type bench.sig.meals.Page = { document : JSValue, plan : bench.sig.Signal (Optional bench.meals.Plan), checked : bench.sig.Signal [Text], resolved : bench.sig.Signal [(bench.meals.Day, [(bench.meals.Slot, bench.meals.Recipe)])] }
+
+{{ A button that runs `action` on a click. }}
+bench.sig.meals.button : JSValue -> [(Text, Text)] -> Text -> '{JS} () ->{JS} JSValue
+bench.sig.meals.button doc attrs label action =
+  node = bench.sig.element doc "button" attrs [bench.sig.textNode doc label]
+  bench.sig.onClick node action
+  node
+
+{{ Applies `change` to the plan, if there is one. }}
+bench.sig.meals.editPlan : bench.sig.meals.Page -> (bench.meals.Plan -> bench.meals.Plan) ->{JS} ()
+bench.sig.meals.editPlan page change =
+  plan = bench.sig.meals.Page.plan page
+  bench.sig.Signal.set plan (Optional.map change (bench.sig.Signal.peek plan))
+
+{{ The position of `name` in `names`, as a key. }}
+bench.sig.meals.keyOf : [Text] -> Text -> Nat
+bench.sig.meals.keyOf names name = List.indexed names |> List.find (cases (other, _) -> other Text.== name) |> Optional.map at2 |> Optional.getOrElse 0
+
+{{
+One meal, built once: its texts are effects on a memo of this slot in its day, so an edit to another meal touches nothing here. Its tray is open when the day's `tray` holds its id. The same markup as {bench.meals.slotView}.
+}}
+bench.sig.meals.slotView : bench.sig.meals.Page -> bench.sig.Signal (Optional (bench.meals.Day, [(bench.meals.Slot, bench.meals.Recipe)])) -> bench.sig.Signal (Optional Nat) -> bench.sig.Ctx -> Nat ->{JS} JSValue
+bench.sig.meals.slotView page dayMemo tray ctx slotId =
+  use Nat * toText
+  use Text ++
+  use bench.sig element textNode
+  doc = bench.sig.meals.Page.document page
+  findSlot inner =
+    slots = match bench.sig.get inner dayMemo with
+      Some (_, slots) -> slots
+      None -> []
+    List.find (cases (slot, _) -> bench.meals.Slot.id slot Nat.== slotId) slots
+  slotMemo = bench.sig.memo ctx findSlot
+  part : Text -> ((bench.meals.Slot, bench.meals.Recipe) -> Text) ->{JS} JSValue
+  part className describe =
+    compute inner = match bench.sig.get inner slotMemo with
+      Some pair -> describe pair
+      None -> ""
+    element doc "span" [("class", className)] [bench.sig.dynText doc ctx compute]
+  kcal = cases (slot, recipe) -> toText (bench.meals.Recipe.kcal recipe * bench.meals.Slot.servings slot) ++ " kcal"
+  protein = cases (slot, recipe) -> toText (bench.meals.Recipe.protein recipe * bench.meals.Slot.servings slot) ++ " g protein"
+  main =
+    element doc "div" [("class", "slot-main")] [
+      part "slot-type" (cases (slot, _) -> bench.meals.word bench.meals.kinds (bench.meals.Slot.kind slot)),
+      part "slot-name" (cases (_, recipe) -> bench.meals.Recipe.name recipe),
+      part "slot-kcal" kcal,
+      part "slot-protein" protein]
+  toggleTray _ =
+    open = bench.sig.Signal.peek tray
+    bench.sig.Signal.set tray (if open === Some slotId then None else Some slotId)
+  more = bench.sig.meals.button doc [("class", "more")] "⋯" toggleTray
+  edit change _ = bench.sig.meals.editPlan page change
+  trayBox =
+    element doc "div" [] [
+      bench.sig.meals.button doc [("class", "info")] "Info" (do ()),
+      bench.sig.meals.button doc [("class", "recipe")] "Recipe" (do ()),
+      part "servings" (cases (slot, _) -> toText (bench.meals.Slot.servings slot)),
+      bench.sig.meals.button doc [("class", "serv-plus")] "+" (edit (bench.meals.Plan.addServing slotId)),
+      bench.sig.meals.button doc [("class", "shuffle")] "Shuffle" (edit (bench.meals.Plan.shuffle slotId)),
+      bench.sig.meals.button doc [("class", "remove")] "Remove" (edit (bench.meals.Plan.remove slotId))]
+  trayClass inner = if bench.sig.get inner tray === Some slotId then "tray" else "tray hidden"
+  bench.sig.dynAttr ctx trayBox "class" trayClass
+  element doc "div" [("class", "slot"), ("data-slot", toText slotId)] [element doc "span" [("class", "thumb")] [], main, more, trayBox]
+
+{{
+One day card, built once: its totals are an effect on a memo of this day in the week, its macros panel is shown while the card's own `macrosOpen` holds, and its meals are a keyed list. Which tray is open is the card's own state, as in {bench.meals.dayView}. The meals sit in a `div.slots` of their own, since a keyed list owns its parent.
+}}
+bench.sig.meals.dayView : bench.sig.meals.Page -> bench.sig.Ctx -> Nat ->{JS} JSValue
+bench.sig.meals.dayView page ctx dayId =
+  use Nat toText
+  use Text ++
+  use bench.sig element textNode
+  doc = bench.sig.meals.Page.document page
+  findDay inner = List.find (cases (day, _) -> bench.meals.Day.id day Nat.== dayId) (bench.sig.get inner (bench.sig.meals.Page.resolved page))
+  dayMemo = bench.sig.memo ctx findDay
+  tray = bench.sig.Signal.new None
+  macrosOpen = bench.sig.Signal.new false
+  key = "day-" ++ toText dayId
+  totals inner = match bench.sig.get inner dayMemo with
+    Some (_, slots) -> bench.meals.dayTotals slots
+    None -> bench.meals.dayTotals []
+  totalsLine inner = bench.meals.totalsText (totals inner)
+  toggleMacros _ = bench.sig.Signal.set macrosOpen (Boolean.not (bench.sig.Signal.peek macrosOpen))
+  toggle = bench.sig.meals.button doc [("class", "macros-toggle")] "Calories and macros" toggleMacros
+  slotsBox = element doc "div" [("class", "slots")] []
+  section =
+    element doc "section" [("id", key), ("class", "day"), ("data-flip-key", key)] [
+      element doc "h3" [("class", "day-name")] [textNode doc (bench.meals.word bench.meals.dayNames dayId)],
+      element doc "p" [("class", "day-totals")] [bench.sig.dynText doc ctx totalsLine],
+      toggle,
+      slotsBox]
+  bar inner index =
+    node = element doc "div" [("class", "bar")] []
+    width barCtx = "width: " ++ toText (List.at index (bench.meals.barWidths (totals barCtx)) |> Optional.getOrElse 0) ++ "%"
+    bench.sig.dynAttr inner node "style" width
+    node
+  macros inner = [element doc "div" [("class", "macros")] (List.map (bar inner) (List.range 0 4))]
+  bench.sig.show ctx section (Some toggle) (inner -> bench.sig.get inner macrosOpen) macros
+  slotsOf inner = match bench.sig.get inner dayMemo with
+    Some (_, slots) -> slots
+    None -> []
+  slotKey = cases (slot, _) -> bench.meals.Slot.id slot
+  renderSlot inner = cases (slot, _) -> bench.sig.meals.slotView page dayMemo tray inner (bench.meals.Slot.id slot)
+  bench.sig.each ctx slotsBox slotsOf slotKey renderSlot
+  section
+
+{{ One grocery item, built once: its count is an effect on `items`, the list it is in. The same markup as {bench.meals.groceryView}'s items. }}
+bench.sig.meals.itemView : bench.sig.meals.Page -> bench.sig.Signal [(Text, Nat)] -> bench.sig.Ctx -> Text ->{JS} JSValue
+bench.sig.meals.itemView page items ctx name =
+  use Text ++
+  use bench.sig element textNode
+  doc = bench.sig.meals.Page.document page
+  checked = bench.sig.meals.Page.checked page
+  count inner = List.find (cases (other, _) -> other Text.== name) (bench.sig.get inner items) |> Optional.map at2 |> Optional.getOrElse 0
+  quantity inner = "×" ++ Nat.toText (count inner)
+  toggle _ =
+    names = bench.sig.Signal.peek checked
+    bench.sig.Signal.set checked (if List.contains name names then List.filter (other -> other Text.!= name) names else names List.:+ name)
+  element doc "li" [("class", "item"), ("data-name", name)] [
+    bench.sig.meals.button doc [("class", "check")] "✓" toggle,
+    element doc "span" [("class", "name")] [textNode doc name],
+    element doc "span" [("class", "qty")] [bench.sig.dynText doc ctx quantity]]
+
+{{ One aisle, built once: a keyed list of a memo of its items. The same markup as {bench.meals.groceryView}'s sections. }}
+bench.sig.meals.aisleView : bench.sig.meals.Page -> bench.sig.Signal ([(Text, [(Text, Nat)])], [(Text, Nat)]) -> bench.sig.Ctx -> Text ->{JS} JSValue
+bench.sig.meals.aisleView page sections ctx aisle =
+  use bench.sig element textNode
+  doc = bench.sig.meals.Page.document page
+  findItems inner = List.find (cases (other, _) -> other Text.== aisle) (at1 (bench.sig.get inner sections)) |> Optional.map at2 |> Optional.getOrElse []
+  items = bench.sig.memo ctx findItems
+  list = element doc "ul" [] []
+  render inner = cases (name, _) -> bench.sig.meals.itemView page items inner name
+  bench.sig.each ctx list (inner -> bench.sig.get inner items) (cases (name, _) -> bench.sig.meals.keyOf bench.meals.ingredients name) render
+  element doc "section" [("class", "aisle")] [element doc "h4" [] [textNode doc aisle], list]
+
+{{ The grocery list: the aisles and the checked items, each a keyed list of a memo of {bench.meals.grocerySections}. The aisles sit in a `div.aisles` of their own, before `#checked`. }}
+bench.sig.meals.groceryView : bench.sig.meals.Page -> bench.sig.Ctx ->{JS} [JSValue]
+bench.sig.meals.groceryView page ctx =
+  use bench.sig element textNode
+  doc = bench.sig.meals.Page.document page
+  counts = bench.sig.memo ctx (inner -> bench.meals.groceryCounts (bench.sig.get inner (bench.sig.meals.Page.resolved page)))
+  sectionsOf inner =
+    countsNow = bench.sig.get inner counts
+    bench.meals.grocerySections countsNow (bench.sig.get inner (bench.sig.meals.Page.checked page))
+  sections = bench.sig.memo ctx sectionsOf
+  done = bench.sig.memo ctx (inner -> at2 (bench.sig.get inner sections))
+  aislesBox = element doc "div" [("class", "aisles")] []
+  renderAisle inner = cases (aisle, _) -> bench.sig.meals.aisleView page sections inner aisle
+  bench.sig.each ctx aislesBox (inner -> at1 (bench.sig.get inner sections)) (cases (aisle, _) -> bench.sig.meals.keyOf bench.meals.aisles aisle) renderAisle
+  doneList = element doc "ul" [] []
+  renderDone inner = cases (name, _) -> bench.sig.meals.itemView page done inner name
+  bench.sig.each ctx doneList (inner -> bench.sig.get inner done) (cases (name, _) -> bench.sig.meals.keyOf bench.meals.ingredients name) renderDone
+  [aislesBox, element doc "section" [("id", "checked")] [element doc "h4" [] [textNode doc "Checked"], doneList]]
+
+{{ The recipe search: an input, a note and the matching recipes, keyed by catalog index. The matches are a memo of the query, which the note reads with them, so a key press runs the note once. The same markup as {bench.meals.searchView}. }}
+bench.sig.meals.searchView : JSValue -> [bench.meals.Recipe] -> bench.sig.Ctx ->{JS} JSValue
+bench.sig.meals.searchView doc recipes ctx =
+  use Nat toText
+  use Text ++
+  use bench.sig element textNode
+  query = bench.sig.Signal.new ""
+  matching inner =
+    q = bench.sig.get inner query
+    (q, List.indexed recipes |> List.filter (cases (recipe, _) -> Text.contains q (bench.meals.Recipe.name recipe)))
+  results = bench.sig.memo ctx matching
+  noteText inner =
+    (q, found) = bench.sig.get inner results
+    "Showing " ++ toText (List.size found) ++ " of " ++ toText (List.size recipes) ++ " for \"" ++ q ++ "\""
+  input = element doc "input" [("id", "search-input"), ("type", "search")] []
+  onInput event = bench.sig.Signal.set query (JSValue.asText! (event :: "target" :: "value"))
+  JSValue.invokeTextVal_ "addEventListener" "input" (JSValue.callback1_ onInput) input
+  list = element doc "ul" [("id", "results")] []
+  renderResult _ = cases
+    (recipe, _) ->
+      element doc "li" [("class", "result")] [
+        element doc "span" [("class", "name")] [textNode doc (bench.meals.Recipe.name recipe)],
+        element doc "span" [("class", "kcal")] [textNode doc (toText (bench.meals.Recipe.kcal recipe) ++ " kcal")],
+        bench.sig.meals.button doc [("class", "add")] "Add" (do ())]
+  bench.sig.each ctx list (inner -> at2 (bench.sig.get inner results)) at2 renderResult
+  element doc "div" [("id", "search")] [input, element doc "p" [("id", "search-note")] [bench.sig.dynText doc ctx noteText], list]
+
+{{
+The meals page in a signals style, on `root`: the plan, the pose and the checked items are signals, and the week, each day and each meal read memos of the plan, so an edit runs only the effects whose values changed. Moving a day runs the same FLIP spring as {bench.meals.ui}, by calling its measuring halves directly. The same markup as {bench.meals.ui}, but for a `div.days`, a `div.slots` per day and a `div.aisles` around the keyed lists.
+}}
+bench.sig.meals.mount : JSValue ->{JS} ()
+bench.sig.meals.mount root =
+  use Text ==
+  use bench.sig element
+  doc = global "document"
+  recipes = bench.meals.catalog()
+  plan = bench.sig.Signal.new None
+  pose = bench.sig.Signal.new "idle"
+  checked = bench.sig.Signal.new []
+  ctx = SigCtx (bench.sig.Owner.new()) None
+  resolveWeek inner = match bench.sig.get inner plan with
+    Some week -> List.map (day -> (day, bench.meals.resolve recipes day)) (bench.meals.Plan.days week)
+    None -> []
+  resolved = bench.sig.memo ctx resolveWeek
+  page = bench.sig.meals.Page.Page doc plan checked resolved
+  hasPlan = bench.sig.memo ctx (inner -> Optional.isSome (bench.sig.get inner plan))
+  planWeek _ = bench.sig.Signal.set plan (Some (bench.meals.Plan.draw 42))
+  replan _ = bench.sig.meals.editPlan page bench.meals.Plan.replan
+  moveDay _ =
+    first = bench.meals.flipPositions()
+    bench.meals.onFrame do bench.meals.flipLast first
+    bench.sig.meals.editPlan page bench.meals.Plan.rotate
+  wave _ = bench.sig.Signal.set pose (if bench.sig.Signal.peek pose == "idle" then "wave" else "idle")
+  buttons =
+    element doc "div" [("class", "buttons")] [
+      bench.sig.meals.button doc [("id", "plan")] "Plan my week" planWeek,
+      bench.sig.meals.button doc [("id", "replan")] "Re-plan" replan,
+      bench.sig.meals.button doc [("id", "move")] "Move Monday to the end" moveDay,
+      bench.sig.meals.button doc [("id", "pose")] "Wave" wave]
+  mascot = element doc "div" [("id", "mascot"), ("class", "mascot")] []
+  bench.sig.dynAttr ctx mascot "data-pose" (inner -> bench.sig.get inner pose)
+  JSValue.setPropertyText "innerHTML" bench.meals.mascotSvg mascot
+  week = element doc "div" [("id", "week")] []
+  weekContent inner =
+    total = element doc "p" [("id", "week-total")] [bench.sig.dynText doc inner (totalCtx -> bench.meals.weekText (bench.sig.get totalCtx resolved))]
+    daysBox = element doc "div" [("class", "days")] []
+    renderDay dayCtx = cases (day, _) -> bench.sig.meals.dayView page dayCtx (bench.meals.Day.id day)
+    bench.sig.each inner daysBox (listCtx -> bench.sig.get listCtx resolved) (cases (day, _) -> bench.meals.Day.id day) renderDay
+    [total, daysBox]
+  bench.sig.show ctx week None (inner -> bench.sig.get inner hasPlan) weekContent
+  grocery = element doc "div" [("id", "grocery")] []
+  bench.sig.show ctx grocery None (inner -> bench.sig.get inner hasPlan) (bench.sig.meals.groceryView page)
+  app = element doc "div" [("id", "app")] [buttons, mascot, week, grocery, bench.sig.meals.searchView doc recipes ctx]
+  JSValue.invoke1_ "appendChild" app root
+
+{{ `run bench.sig.meals.build <bare|debug> <outDir>`: the meals page in a signals style, written as `meals-<config>`. }}
+bench.sig.meals.build : '{IO, Exception} ()
+bench.sig.meals.build = do
+  use Text ++
+  start _ = bench.sig.meals.mount (global "document" :: "body")
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("meals-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+
+
+---
+{{
+A minimal signals core, Leptos's model in Unison: a view is built once, and each piece of it that depends on a signal is an effect that updates its own DOM node when the signal changes. Nothing is diffed and no body runs again.
+
+An effect is an observer: a flag that is cleared when its owner is disposed, and the body that runs it again. Subscriptions are consumed when they fire: setting a signal empties its list and runs each live observer, which subscribes again as it reads. So an effect that stops reading a signal stops hearing from it, with no list of sources kept.
+}}
+type bench.sig.Observer = SigObserver (Ref JS Boolean) (Ref JS bench.sig.Body)
+
+{{ An effect's body, in a box of its own: UCM's compiler applies `Ref.read` to two arguments when a function read from a `Ref` is applied directly. }}
+type bench.sig.Body = SigBody ('{JS} ())
+
+{{ A value that effects can depend on: the value, and the observers that read it since it last changed. }}
+type bench.sig.Signal a = SigSignal (Ref JS a) (Ref JS [bench.sig.Observer])
+
+{{ What a piece of view owns: the effects made while building it, and what to run when it is removed. }}
+type bench.sig.Owner = SigOwner (Ref JS [bench.sig.Observer]) (Ref JS ['{JS} ()])
+
+{{ The reactive context: the owner new effects belong to, and the observer a read subscribes, if any. Passed explicitly by the core; {type bench.sig.Reactive} carries it as an ability instead. }}
+type bench.sig.Ctx = SigCtx bench.sig.Owner (Optional bench.sig.Observer)
+
+{{ Selection by key, as Solid's `createSelector` and Proscenium's `Selector` store do: an effect that asks whether its key is selected hears only about changes to that key. }}
+type bench.sig.Selector = SigSelector (Ref JS (Optional Nat)) (Ref JS (Map Nat [bench.sig.Observer]))
+
+ability bench.sig.Reactive where
+  context : bench.sig.Ctx
+
+{{ Runs `observer`'s body if its owner is still there. }}
+bench.sig.run : bench.sig.Observer ->{JS} ()
+bench.sig.run = cases
+  SigObserver alive body ->
+    if Ref.read alive then match Ref.read body with SigBody thunk -> thunk()
+    else ()
+
+{{ A new signal holding `value`. }}
+bench.sig.Signal.new : a ->{JS} bench.sig.Signal a
+bench.sig.Signal.new value = SigSignal (JS.ref value) (JS.ref [])
+
+{{ The signal's value, subscribing no one. }}
+bench.sig.Signal.peek : bench.sig.Signal a ->{JS} a
+bench.sig.Signal.peek = cases SigSignal cell _ -> Ref.read cell
+
+{{ Sets the signal and runs every live observer that read it since it last changed. }}
+bench.sig.Signal.set : bench.sig.Signal a -> a ->{JS} ()
+bench.sig.Signal.set signal value = match signal with
+  SigSignal cell subscribers ->
+    Ref.write cell value
+    waiting = Ref.read subscribers
+    Ref.write subscribers []
+    List.foreach bench.sig.run waiting
+
+{{ The signal's value, subscribing the context's observer, if any. }}
+bench.sig.get : bench.sig.Ctx -> bench.sig.Signal a ->{JS} a
+bench.sig.get ctx signal = match (ctx, signal) with
+  (SigCtx _ observer, SigSignal cell subscribers) ->
+    match observer with
+      Some current -> Ref.write subscribers (current List.+: Ref.read subscribers)
+      None -> ()
+    Ref.read cell
+
+{{ An effect owned by the context's owner: runs `body` now, and again whenever a signal it read changes, until the owner is disposed. }}
+bench.sig.effect : bench.sig.Ctx -> (bench.sig.Ctx ->{JS} ()) ->{JS} ()
+bench.sig.effect ctx body = match ctx with
+  SigCtx owner _ ->
+    bodyRef = JS.ref (SigBody do ())
+    observer = SigObserver (JS.ref true) bodyRef
+    Ref.write bodyRef (SigBody do body (SigCtx owner (Some observer)))
+    match owner with SigOwner observers _ -> Ref.write observers (observer List.+: Ref.read observers)
+    bench.sig.run observer
+
+{{ A new owner, with no effects yet. }}
+bench.sig.Owner.new : '{JS} bench.sig.Owner
+bench.sig.Owner.new = do SigOwner (JS.ref []) (JS.ref [])
+
+{{ Stops the owner's effects and runs its cleanups. }}
+bench.sig.Owner.dispose : bench.sig.Owner ->{JS} ()
+bench.sig.Owner.dispose = cases
+  SigOwner observers cleanups ->
+    List.foreach (cases SigObserver alive _ -> Ref.write alive false) (Ref.read observers)
+    List.foreach (cleanup -> cleanup()) (Ref.read cleanups)
+
+{{ Runs `cleanup` when the context's owner is disposed. }}
+bench.sig.onCleanup : bench.sig.Ctx -> '{JS} () ->{JS} ()
+bench.sig.onCleanup ctx cleanup = match ctx with
+  SigCtx (SigOwner _ cleanups) _ -> Ref.write cleanups (cleanup List.+: Ref.read cleanups)
+
+{{ A selector with nothing selected. }}
+bench.sig.Selector.new : '{JS} bench.sig.Selector
+bench.sig.Selector.new = do SigSelector (JS.ref None) (JS.ref Map.empty)
+
+{{ Whether `key` is selected, subscribing the context's observer to changes of that key only. }}
+bench.sig.Selector.is : bench.sig.Ctx -> bench.sig.Selector -> Nat ->{JS} Boolean
+bench.sig.Selector.is ctx selector key = match (ctx, selector) with
+  (SigCtx _ observer, SigSelector current subscribers) ->
+    match observer with
+      Some watcher ->
+        table = Ref.read subscribers
+        Ref.write subscribers (Map.insert key (watcher List.+: Optional.getOrElse [] (Map.get key table)) table)
+      None -> ()
+    match Ref.read current with
+      Some selected -> selected Nat.== key
+      None -> false
+
+{{ Selects `next`, running the observers of the key selected before and of `next`. }}
+bench.sig.Selector.set : bench.sig.Selector -> Optional Nat ->{JS} ()
+bench.sig.Selector.set selector next = match selector with
+  SigSelector current subscribers ->
+    previous = Ref.read current
+    Ref.write current next
+    wake = cases
+      Some key ->
+        table = Ref.read subscribers
+        match Map.get key table with
+          Some waiting ->
+            Ref.write subscribers (Map.insert key [] table)
+            List.foreach bench.sig.run waiting
+          None -> ()
+      None -> ()
+    if previous === next then ()
+    else
+      wake previous
+      wake next
+
+{{ Drops `key`'s subscriptions, when the view that asked about it is removed. }}
+bench.sig.Selector.forget : bench.sig.Selector -> Nat ->{JS} ()
+bench.sig.Selector.forget selector key = match selector with
+  SigSelector _ subscribers -> Ref.write subscribers (Map.delete key (Ref.read subscribers))
+
+{{ An element with `attrs` and `children`. }}
+bench.sig.element : JSValue -> Text -> [(Text, Text)] -> [JSValue] ->{JS} JSValue
+bench.sig.element doc tag attrs children =
+  node = JSValue.invokeText1 "createElement" tag doc
+  List.foreach (cases (name, value) -> JSValue.invokeText2_ "setAttribute" name value node) attrs
+  List.foreach (child -> JSValue.invoke1_ "appendChild" child node) children
+  node
+
+{{ A text node. }}
+bench.sig.textNode : JSValue -> Text ->{JS} JSValue
+bench.sig.textNode doc text = JSValue.invokeText1 "createTextNode" text doc
+
+{{ Runs `action` on each click of `node`. }}
+bench.sig.onClick : JSValue -> '{JS} () ->{JS} ()
+bench.sig.onClick node action =
+  JSValue.invokeTextVal_ "addEventListener" "click" (JSValue.callback1_ (_ -> action())) node
+
+{{ A text node whose text is an effect: `compute` runs once to make it, and again to set its text whenever a signal it read changes. }}
+bench.sig.dynText : JSValue -> bench.sig.Ctx -> (bench.sig.Ctx ->{JS} Text) ->{JS} JSValue
+bench.sig.dynText doc ctx compute =
+  holder : Ref JS (Optional JSValue)
+  holder = JS.ref None
+  draw inner =
+    value = compute inner
+    match Ref.read holder with
+      None -> Ref.write holder (Some (bench.sig.textNode doc value))
+      Some node -> JSValue.setPropertyText "nodeValue" value node
+  bench.sig.effect ctx draw
+  match Ref.read holder with
+    Some node -> node
+    None -> bug "bench.sig.dynText: the effect did not run"
+
+{{ An attribute of `node` kept equal to `compute` by an effect. }}
+bench.sig.dynAttr : bench.sig.Ctx -> JSValue -> Text -> (bench.sig.Ctx ->{JS} Text) ->{JS} ()
+bench.sig.dynAttr ctx node name compute =
+  bench.sig.effect ctx (inner -> JSValue.invokeText2_ "setAttribute" name (compute inner) node)
+
+{{
+A keyed list under `parent`, as Leptos's `For` is: an effect that reads the items and brings the children in line with them. A new item is built once, under an owner of its own and untracked, so building it subscribes the list to nothing; a removed one has its owner disposed, and so does every item when the list's own owner is. A cleared list empties `parent` at once, so the list must be `parent`'s only content.
+}}
+bench.sig.each : bench.sig.Ctx -> JSValue -> (bench.sig.Ctx ->{JS} [item]) -> (item -> Nat) -> (bench.sig.Ctx -> item ->{JS} JSValue) ->{JS} ()
+bench.sig.each ctx parent items keyOf render =
+  mounted : Ref JS [(Nat, JSValue, bench.sig.Owner)]
+  mounted = JS.ref []
+  create item =
+    owner = bench.sig.Owner.new()
+    node = render (SigCtx owner None) item
+    (keyOf item, node, owner)
+  update inner =
+    news = items inner
+    Ref.write mounted (bench.sig.reconcile parent (Ref.read mounted) news keyOf create)
+  bench.sig.effect ctx update
+  disposeAll _ = List.foreach (cases (_, _, owner) -> bench.sig.Owner.dispose owner) (Ref.read mounted)
+  bench.sig.onCleanup ctx disposeAll
+
+{{
+Brings `parent`'s children, `olds`, in line with `news`, with the same fast paths as the tree's reconcile: a cleared list, a list built from empty, the common prefix and suffix kept in place, a run that only lost or only gained children, and a swap of the first and last of what is left. Anything else is reconciled by key, with ink's `stableIndices` deciding the moves.
+}}
+bench.sig.reconcile : JSValue -> [(Nat, JSValue, bench.sig.Owner)] -> [item] -> (item -> Nat) -> (item ->{JS} (Nat, JSValue, bench.sig.Owner)) ->{JS} [(Nat, JSValue, bench.sig.Owner)]
+bench.sig.reconcile parent olds news keyOf create =
+  use List :+ +: ++
+  use Nat ==
+  keyOld = cases (key, _, _) -> key
+  nodeOf = cases (_, node, _) -> node
+  drop = cases
+    (_, node, owner) ->
+      bench.sig.Owner.dispose owner
+      JSValue.invoke0_ "remove" node
+  placeAfter previous node = match previous with
+    Some before -> JSValue.invoke1_ "after" node before
+    None -> JSValue.invoke1_ "prepend" node parent
+  place previous = cases
+    [] -> ()
+    entry +: rest ->
+      placeAfter previous (nodeOf entry)
+      place (Some (nodeOf entry)) rest
+  if List.isEmpty news then
+    List.foreach (cases (_, _, owner) -> bench.sig.Owner.dispose owner) olds
+    JSValue.setPropertyText "textContent" "" parent
+    []
+  else if List.isEmpty olds then
+    created = List.map create news
+    List.foreach (entry -> JSValue.invoke1_ "appendChild" (nodeOf entry) parent) created
+    created
+  else
+    takePrefix acc olds' news' = match (olds', news') with
+      (old +: restOld, new +: restNew) | keyOld old == keyOf new -> takePrefix (acc :+ old) restOld restNew
+      _ -> (acc, olds', news')
+    takeSuffix acc olds' news' = match (olds', news') with
+      (restOld :+ old, restNew :+ new) | keyOld old == keyOf new -> takeSuffix (old +: acc) restOld restNew
+      _ -> (acc, olds', news')
+    sameKeys olds' news' = match (olds', news') with
+      (old +: restOld, new +: restNew) -> (keyOld old == keyOf new) && sameKeys restOld restNew
+      ([], []) -> true
+      _ -> false
+    (prefix, oldMiddle, newMiddle) = takePrefix [] olds news
+    (suffix, oldMiddle', newMiddle') = takeSuffix [] oldMiddle newMiddle
+    start = List.last prefix |> Optional.map nodeOf
+    middle =
+      if List.isEmpty newMiddle' then
+        List.foreach drop oldMiddle'
+        []
+      else if List.isEmpty oldMiddle' then
+        created = List.map create newMiddle'
+        place start created
+        created
+      else match (oldMiddle', newMiddle') with
+        (oldFirst +: (oldInner :+ oldLast), newFirst +: (newInner :+ newLast)) | (keyOld oldFirst == keyOf newLast) && (keyOld oldLast == keyOf newFirst) && sameKeys oldInner newInner ->
+          placeAfter start (nodeOf oldLast)
+          placeAfter (Some (List.last oldInner |> Optional.map nodeOf |> Optional.getOrElse (nodeOf oldLast))) (nodeOf oldFirst)
+          [oldLast] ++ oldInner ++ [oldFirst]
+        _ -> bench.sig.reconcileKeyed parent start oldMiddle' newMiddle' keyOf create
+    prefix ++ middle ++ suffix
+
+{{ The keyed reconcile of {bench.sig.reconcile}, for the children after `start` (the node they follow, or `None` at the start of `parent`). }}
+bench.sig.reconcileKeyed : JSValue -> Optional JSValue -> [(Nat, JSValue, bench.sig.Owner)] -> [item] -> (item -> Nat) -> (item ->{JS} (Nat, JSValue, bench.sig.Owner)) ->{JS} [(Nat, JSValue, bench.sig.Owner)]
+bench.sig.reconcileKeyed parent start olds news keyOf create =
+  use List +:
+  keyOld = cases (key, _, _) -> key
+  nodeOf = cases (_, node, _) -> node
+  oldByKey = List.indexed olds |> List.map (cases (entry, index) -> (keyOld entry, (index, entry))) |> Map.fromList
+  found = List.map (item -> Map.get (keyOf item) oldByKey) news
+  reuse = cases
+    (_, Some (_, entry)) -> entry
+    (item, None) -> create item
+  rendered = List.zip news found |> List.map reuse
+  keep = Set.fromList (List.map keyOf news)
+  dropMissing = cases
+    (key, node, owner) ->
+      if Set.contains key keep then ()
+      else
+        bench.sig.Owner.dispose owner
+        JSValue.invoke0_ "remove" node
+  List.foreach dropMissing olds
+  stable = lib.dfreeman_ink_r5.Incremental.reconcile.stableIndices (List.map (Optional.map at1) found)
+  place previous = cases
+    [] -> ()
+    (entry, isStable) +: rest ->
+      node = nodeOf entry
+      if isStable then place (Some node) rest
+      else
+        match previous with
+          Some before -> JSValue.invoke1_ "after" node before
+          None -> JSValue.invoke1_ "prepend" node parent
+        place (Some node) rest
+  place start (List.zip rendered stable)
+  rendered
+
+{{ Runs `body` with `ctx` as its {type bench.sig.Reactive} context. }}
+bench.sig.withCtx : bench.sig.Ctx -> '{g, bench.sig.Reactive} r ->{g} r
+bench.sig.withCtx ctx body =
+  handle body()
+  with cases
+    { r } -> r
+    { bench.sig.Reactive.context -> resume } -> bench.sig.withCtx ctx do resume ctx
+
+{{ {bench.sig.get}, with the context from {type bench.sig.Reactive}: one ability operation per read. }}
+bench.sig.read : bench.sig.Signal a ->{bench.sig.Reactive, JS} a
+bench.sig.read signal = bench.sig.get (bench.sig.Reactive.context) signal
+
+{{ {bench.sig.dynText} with the context from {type bench.sig.Reactive}. }}
+bench.sig.dynTextA : JSValue -> '{bench.sig.Reactive, JS} Text ->{bench.sig.Reactive, JS} JSValue
+bench.sig.dynTextA doc compute = bench.sig.dynText doc (bench.sig.Reactive.context) (ctx -> bench.sig.withCtx ctx compute)
+
+{{ {bench.sig.dynAttr} with the context from {type bench.sig.Reactive}. }}
+bench.sig.dynAttrA : JSValue -> Text -> '{bench.sig.Reactive, JS} Text ->{bench.sig.Reactive, JS} ()
+bench.sig.dynAttrA node name compute = bench.sig.dynAttr (bench.sig.Reactive.context) node name (ctx -> bench.sig.withCtx ctx compute)
+
+{{ {bench.sig.Selector.is} with the context from {type bench.sig.Reactive}. }}
+bench.sig.Selector.isA : bench.sig.Selector -> Nat ->{bench.sig.Reactive, JS} Boolean
+bench.sig.Selector.isA selector key = bench.sig.Selector.is (bench.sig.Reactive.context) selector key
+
+{{ {bench.sig.onCleanup} with the context from {type bench.sig.Reactive}. }}
+bench.sig.onCleanupA : '{JS} () ->{bench.sig.Reactive, JS} ()
+bench.sig.onCleanupA cleanup = bench.sig.onCleanup (bench.sig.Reactive.context) cleanup
+
+{{ A row of the signals rows app: its id, and its label as a signal of its own. }}
+type bench.sig.rows.SRow = SRow Nat (bench.sig.Signal Text)
+
+{{ The rows app's state: the page's `document`, the rows, the selection, and the next id and seed of the label generator {bench.rows.Model.append} shares with every other rows app. }}
+type bench.sig.rows.State = SigRowsState JSValue (bench.sig.Signal [bench.sig.rows.SRow]) bench.sig.Selector (Ref JS (Nat, Nat))
+
+bench.sig.rows.SRow.id : bench.sig.rows.SRow -> Nat
+bench.sig.rows.SRow.id = cases SRow rowId _ -> rowId
+
+bench.sig.rows.State.rows : bench.sig.rows.State -> bench.sig.Signal [bench.sig.rows.SRow]
+bench.sig.rows.State.rows = cases SigRowsState _ rowsSignal _ _ -> rowsSignal
+
+{{ `count` new rows, labelled by the same generator and in the same order as {bench.rows.Model.append}. }}
+bench.sig.rows.generate : bench.sig.rows.State -> Nat ->{JS} [bench.sig.rows.SRow]
+bench.sig.rows.generate state count = match state with
+  SigRowsState _ _ _ counters ->
+    (nextId, seed) = Ref.read counters
+    model = bench.rows.Model.append count (bench.rows.Model.Model [] nextId seed None)
+    Ref.write counters (bench.rows.Model.nextId model, bench.rows.Model.seed model)
+    List.map (cases bench.rows.Row.Row rowId label -> SRow rowId (bench.sig.Signal.new label)) (bench.rows.Model.rows model)
+
+{{ The benchmark's operations, as the other rows apps define them ({bench.rows.Model}): replace with `count` rows. }}
+bench.sig.rows.replace : bench.sig.rows.State -> Nat ->{JS} ()
+bench.sig.rows.replace state count = bench.sig.Signal.set (bench.sig.rows.State.rows state) (bench.sig.rows.generate state count)
+
+{{ Appends `count` rows. }}
+bench.sig.rows.append : bench.sig.rows.State -> Nat ->{JS} ()
+bench.sig.rows.append state count =
+  rowsSignal = bench.sig.rows.State.rows state
+  existing = bench.sig.Signal.peek rowsSignal
+  bench.sig.Signal.set rowsSignal (existing List.++ bench.sig.rows.generate state count)
+
+{{ Appends " !!!" to every tenth row's label: a set of each of those rows' label signals, and nothing else. }}
+bench.sig.rows.updateEveryTenth : bench.sig.rows.State ->{JS} ()
+bench.sig.rows.updateEveryTenth state =
+  bump = cases
+    (SRow _ label, index) ->
+      if index Nat.% 10 Nat.== 0 then bench.sig.Signal.set label (bench.sig.Signal.peek label Text.++ " !!!")
+      else ()
+  List.foreach bump (List.indexed (bench.sig.Signal.peek (bench.sig.rows.State.rows state)))
+
+{{ Swaps the second row and the second-to-last of a thousand. }}
+bench.sig.rows.swap : bench.sig.rows.State ->{JS} ()
+bench.sig.rows.swap state =
+  rowsSignal = bench.sig.rows.State.rows state
+  current = bench.sig.Signal.peek rowsSignal
+  if List.size current Nat.> 998 then
+    match (List.at 1 current, List.at 998 current) with
+      (Some second, Some secondToLast) ->
+        bench.sig.Signal.set rowsSignal (current |> List.replace 1 secondToLast |> List.replace 998 second)
+      _ -> ()
+  else ()
+
+{{ Moves the last row to the front and puts one new row after it. }}
+bench.sig.rows.rotateInsert : bench.sig.rows.State ->{JS} ()
+bench.sig.rows.rotateInsert state =
+  use List :+ ++
+  rowsSignal = bench.sig.rows.State.rows state
+  match bench.sig.Signal.peek rowsSignal with
+    rest :+ last -> bench.sig.Signal.set rowsSignal ([last] ++ bench.sig.rows.generate state 1 ++ rest)
+    [] -> ()
+
+{{ Removes the row with `rowId`. }}
+bench.sig.rows.remove : bench.sig.rows.State -> Nat ->{JS} ()
+bench.sig.rows.remove state rowId =
+  rowsSignal = bench.sig.rows.State.rows state
+  bench.sig.Signal.set rowsSignal (List.filter (row -> bench.sig.rows.SRow.id row Nat.!= rowId) (bench.sig.Signal.peek rowsSignal))
+
+{{
+One row, with the reactive context passed explicitly. Built once: its label is a text effect on the row's label signal, and its class an effect on the selector for its id. The same markup as {bench.rows.rowView}.
+}}
+bench.sig.rows.rowView : bench.sig.rows.State -> bench.sig.Ctx -> bench.sig.rows.SRow ->{JS} JSValue
+bench.sig.rows.rowView state ctx = cases
+  SRow rowId label ->
+    match state with
+      SigRowsState doc _ selection _ ->
+        use bench.sig element textNode
+        labelLink = element doc "a" [("class", "lbl")] [bench.sig.dynText doc ctx (inner -> bench.sig.get inner label)]
+        bench.sig.onClick labelLink do bench.sig.Selector.set selection (Some rowId)
+        removeLink = element doc "a" [("class", "remove")] [textNode doc "x"]
+        bench.sig.onClick removeLink do bench.sig.rows.remove state rowId
+        row =
+          element doc "tr" [] [
+            element doc "td" [("class", "col-md-1")] [textNode doc (Nat.toText rowId)],
+            element doc "td" [("class", "col-md-4")] [labelLink],
+            element doc "td" [("class", "col-md-1")] [removeLink],
+            element doc "td" [("class", "col-md-6")] []]
+        bench.sig.dynAttr ctx row "class" (inner -> if bench.sig.Selector.is inner selection rowId then "danger" else "")
+        bench.sig.onCleanup ctx do bench.sig.Selector.forget selection rowId
+        row
+
+{{ {bench.sig.rows.rowView}, with the reactive context carried by {type bench.sig.Reactive}: each read and each effect made is an ability operation. }}
+bench.sig.rows.rowViewA : bench.sig.rows.State -> bench.sig.rows.SRow ->{bench.sig.Reactive, JS} JSValue
+bench.sig.rows.rowViewA state = cases
+  SRow rowId label ->
+    match state with
+      SigRowsState doc _ selection _ ->
+        use bench.sig element textNode
+        labelLink = element doc "a" [("class", "lbl")] [bench.sig.dynTextA doc do bench.sig.read label]
+        bench.sig.onClick labelLink do bench.sig.Selector.set selection (Some rowId)
+        removeLink = element doc "a" [("class", "remove")] [textNode doc "x"]
+        bench.sig.onClick removeLink do bench.sig.rows.remove state rowId
+        row =
+          element doc "tr" [] [
+            element doc "td" [("class", "col-md-1")] [textNode doc (Nat.toText rowId)],
+            element doc "td" [("class", "col-md-4")] [labelLink],
+            element doc "td" [("class", "col-md-1")] [removeLink],
+            element doc "td" [("class", "col-md-6")] []]
+        bench.sig.dynAttrA row "class" do if bench.sig.Selector.isA selection rowId then "danger" else ""
+        bench.sig.onCleanupA do bench.sig.Selector.forget selection rowId
+        row
+
+{{
+Builds the rows app on `root`: the buttons, and the table whose body is a keyed list ({bench.sig.each}) of the rows signal. `rowView` builds a row and `readRows` reads the rows signal, each in the given context, so the explicit and the ability versions share everything else.
+}}
+bench.sig.rows.mount : (bench.sig.rows.State -> bench.sig.Ctx -> bench.sig.rows.SRow ->{JS} JSValue) -> (bench.sig.rows.State -> bench.sig.Ctx ->{JS} [bench.sig.rows.SRow]) -> JSValue ->{JS} ()
+bench.sig.rows.mount rowView readRows root =
+  use bench.sig element textNode
+  doc = global "document"
+  initial = bench.rows.Model.initial
+  state = SigRowsState doc (bench.sig.Signal.new []) (bench.sig.Selector.new()) (JS.ref (bench.rows.Model.nextId initial, bench.rows.Model.seed initial))
+  ctx = SigCtx (bench.sig.Owner.new()) None
+  button buttonId label action =
+    node = element doc "button" [("id", buttonId)] [textNode doc label]
+    bench.sig.onClick node action
+    node
+  buttons =
+    element doc "div" [("class", "buttons")] [
+      button "run" "Create 1,000 rows" do bench.sig.rows.replace state 1000,
+      button "runlots" "Create 10,000 rows" do bench.sig.rows.replace state 10000,
+      button "add" "Append 1,000 rows" do bench.sig.rows.append state 1000,
+      button "update" "Update every 10th row" do bench.sig.rows.updateEveryTenth state,
+      button "clear" "Clear" do bench.sig.Signal.set (bench.sig.rows.State.rows state) [],
+      button "swaprows" "Swap rows" do bench.sig.rows.swap state,
+      button "rotate" "Rotate and insert" do bench.sig.rows.rotateInsert state]
+  tbody = element doc "tbody" [("id", "tbody")] []
+  app = element doc "div" [("id", "app")] [buttons, element doc "table" [("class", "table")] [tbody]]
+  bench.sig.each ctx tbody (readRows state) bench.sig.rows.SRow.id (rowView state)
+  JSValue.invoke1_ "appendChild" app root
+
+{{ `run bench.sig.rows.build <bare|debug> <outDir>`: the signals rows app with the context passed explicitly, written as `rows-<config>`. }}
+bench.sig.rows.build : '{IO, Exception} ()
+bench.sig.rows.build = do
+  use Text ++
+  readRows state ctx = bench.sig.get ctx (bench.sig.rows.State.rows state)
+  start _ = bench.sig.rows.mount bench.sig.rows.rowView readRows (global "document" :: "body")
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("rows-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+{{ `run bench.sig.rowsA.build <bare|debug> <outDir>`: the signals rows app with the context carried by {type bench.sig.Reactive}, written as `rows-<config>`. }}
+bench.sig.rowsA.build : '{IO, Exception} ()
+bench.sig.rowsA.build = do
+  use Text ++
+  readRows state ctx = bench.sig.withCtx ctx do bench.sig.read (bench.sig.rows.State.rows state)
+  rowView state ctx row = bench.sig.withCtx ctx do bench.sig.rows.rowViewA state row
+  start _ = bench.sig.rows.mount rowView readRows (global "document" :: "body")
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("rows-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+{{ A derived signal: `compute` runs as an effect, and the signal it returns is set only when the value changes (`===`), so its readers hear only about real changes. }}
+bench.sig.memo : bench.sig.Ctx -> (bench.sig.Ctx ->{JS} a) ->{JS} bench.sig.Signal a
+bench.sig.memo ctx compute =
+  holder = JS.ref None
+  update inner =
+    value = compute inner
+    match Ref.read holder with
+      None -> Ref.write holder (Some (bench.sig.Signal.new value))
+      Some signal -> if bench.sig.Signal.peek signal === value then () else bench.sig.Signal.set signal value
+  bench.sig.effect ctx update
+  match Ref.read holder with
+    Some signal -> signal
+    None -> bug "bench.sig.memo: the effect did not run"
+
+{{ Content that exists while `condition` holds: built under an owner of its own when it becomes true, and put after `anchor`, or at the end of `parent`; disposed and removed when it becomes false, or when the context's owner is. }}
+bench.sig.show : bench.sig.Ctx -> JSValue -> Optional JSValue -> (bench.sig.Ctx ->{JS} Boolean) -> (bench.sig.Ctx ->{JS} [JSValue]) ->{JS} ()
+bench.sig.show ctx parent anchor condition build =
+  use List +:
+  current = JS.ref None
+  hide _ = match Ref.read current with
+    Some (owner, nodes) ->
+      bench.sig.Owner.dispose owner
+      List.foreach (node -> JSValue.invoke0_ "remove" node) nodes
+      Ref.write current None
+    None -> ()
+  insert previous = cases
+    [] -> ()
+    node +: rest ->
+      match previous with
+        Some before -> JSValue.invoke1_ "after" node before
+        None -> JSValue.invoke1_ "appendChild" node parent
+      insert (Some node) rest
+  update inner =
+    visible = condition inner
+    match (visible, Ref.read current) with
+      (true, None) ->
+        owner = bench.sig.Owner.new()
+        nodes = build (SigCtx owner None)
+        insert anchor nodes
+        Ref.write current (Some (owner, nodes))
+      (false, Some _) -> hide()
+      _ -> ()
+  bench.sig.effect ctx update
+  bench.sig.onCleanup ctx hide
+
+{{ What the meals page's views share: the `document`, the plan, the checked grocery items, and the week resolved against the catalog, a memo of the plan. }}
+type bench.sig.meals.Page = { document : JSValue, plan : bench.sig.Signal (Optional bench.meals.Plan), checked : bench.sig.Signal [Text], resolved : bench.sig.Signal [(bench.meals.Day, [(bench.meals.Slot, bench.meals.Recipe)])] }
+
+{{ A button that runs `action` on a click. }}
+bench.sig.meals.button : JSValue -> [(Text, Text)] -> Text -> '{JS} () ->{JS} JSValue
+bench.sig.meals.button doc attrs label action =
+  node = bench.sig.element doc "button" attrs [bench.sig.textNode doc label]
+  bench.sig.onClick node action
+  node
+
+{{ Applies `change` to the plan, if there is one. }}
+bench.sig.meals.editPlan : bench.sig.meals.Page -> (bench.meals.Plan -> bench.meals.Plan) ->{JS} ()
+bench.sig.meals.editPlan page change =
+  plan = bench.sig.meals.Page.plan page
+  bench.sig.Signal.set plan (Optional.map change (bench.sig.Signal.peek plan))
+
+{{ The position of `name` in `names`, as a key. }}
+bench.sig.meals.keyOf : [Text] -> Text -> Nat
+bench.sig.meals.keyOf names name = List.indexed names |> List.find (cases (other, _) -> other Text.== name) |> Optional.map at2 |> Optional.getOrElse 0
+
+{{
+One meal, built once: its texts are effects on a memo of this slot in its day, so an edit to another meal touches nothing here. Its tray is open when the day's `tray` holds its id. The same markup as {bench.meals.slotView}.
+}}
+bench.sig.meals.slotView : bench.sig.meals.Page -> bench.sig.Signal (Optional (bench.meals.Day, [(bench.meals.Slot, bench.meals.Recipe)])) -> bench.sig.Signal (Optional Nat) -> bench.sig.Ctx -> Nat ->{JS} JSValue
+bench.sig.meals.slotView page dayMemo tray ctx slotId =
+  use Nat * toText
+  use Text ++
+  use bench.sig element textNode
+  doc = bench.sig.meals.Page.document page
+  findSlot inner =
+    slots = match bench.sig.get inner dayMemo with
+      Some (_, slots) -> slots
+      None -> []
+    List.find (cases (slot, _) -> bench.meals.Slot.id slot Nat.== slotId) slots
+  slotMemo = bench.sig.memo ctx findSlot
+  part : Text -> ((bench.meals.Slot, bench.meals.Recipe) -> Text) ->{JS} JSValue
+  part className describe =
+    compute inner = match bench.sig.get inner slotMemo with
+      Some pair -> describe pair
+      None -> ""
+    element doc "span" [("class", className)] [bench.sig.dynText doc ctx compute]
+  kcal = cases (slot, recipe) -> toText (bench.meals.Recipe.kcal recipe * bench.meals.Slot.servings slot) ++ " kcal"
+  protein = cases (slot, recipe) -> toText (bench.meals.Recipe.protein recipe * bench.meals.Slot.servings slot) ++ " g protein"
+  main =
+    element doc "div" [("class", "slot-main")] [
+      part "slot-type" (cases (slot, _) -> bench.meals.word bench.meals.kinds (bench.meals.Slot.kind slot)),
+      part "slot-name" (cases (_, recipe) -> bench.meals.Recipe.name recipe),
+      part "slot-kcal" kcal,
+      part "slot-protein" protein]
+  toggleTray _ =
+    open = bench.sig.Signal.peek tray
+    bench.sig.Signal.set tray (if open === Some slotId then None else Some slotId)
+  more = bench.sig.meals.button doc [("class", "more")] "⋯" toggleTray
+  edit change _ = bench.sig.meals.editPlan page change
+  trayBox =
+    element doc "div" [] [
+      bench.sig.meals.button doc [("class", "info")] "Info" (do ()),
+      bench.sig.meals.button doc [("class", "recipe")] "Recipe" (do ()),
+      part "servings" (cases (slot, _) -> toText (bench.meals.Slot.servings slot)),
+      bench.sig.meals.button doc [("class", "serv-plus")] "+" (edit (bench.meals.Plan.addServing slotId)),
+      bench.sig.meals.button doc [("class", "shuffle")] "Shuffle" (edit (bench.meals.Plan.shuffle slotId)),
+      bench.sig.meals.button doc [("class", "remove")] "Remove" (edit (bench.meals.Plan.remove slotId))]
+  trayClass inner = if bench.sig.get inner tray === Some slotId then "tray" else "tray hidden"
+  bench.sig.dynAttr ctx trayBox "class" trayClass
+  element doc "div" [("class", "slot"), ("data-slot", toText slotId)] [element doc "span" [("class", "thumb")] [], main, more, trayBox]
+
+{{
+One day card, built once: its totals are an effect on a memo of this day in the week, its macros panel is shown while the card's own `macrosOpen` holds, and its meals are a keyed list. Which tray is open is the card's own state, as in {bench.meals.dayView}. The meals sit in a `div.slots` of their own, since a keyed list owns its parent.
+}}
+bench.sig.meals.dayView : bench.sig.meals.Page -> bench.sig.Ctx -> Nat ->{JS} JSValue
+bench.sig.meals.dayView page ctx dayId =
+  use Nat toText
+  use Text ++
+  use bench.sig element textNode
+  doc = bench.sig.meals.Page.document page
+  findDay inner = List.find (cases (day, _) -> bench.meals.Day.id day Nat.== dayId) (bench.sig.get inner (bench.sig.meals.Page.resolved page))
+  dayMemo = bench.sig.memo ctx findDay
+  tray = bench.sig.Signal.new None
+  macrosOpen = bench.sig.Signal.new false
+  key = "day-" ++ toText dayId
+  totals inner = match bench.sig.get inner dayMemo with
+    Some (_, slots) -> bench.meals.dayTotals slots
+    None -> bench.meals.dayTotals []
+  totalsLine inner = bench.meals.totalsText (totals inner)
+  toggleMacros _ = bench.sig.Signal.set macrosOpen (Boolean.not (bench.sig.Signal.peek macrosOpen))
+  toggle = bench.sig.meals.button doc [("class", "macros-toggle")] "Calories and macros" toggleMacros
+  slotsBox = element doc "div" [("class", "slots")] []
+  section =
+    element doc "section" [("id", key), ("class", "day"), ("data-flip-key", key)] [
+      element doc "h3" [("class", "day-name")] [textNode doc (bench.meals.word bench.meals.dayNames dayId)],
+      element doc "p" [("class", "day-totals")] [bench.sig.dynText doc ctx totalsLine],
+      toggle,
+      slotsBox]
+  bar inner index =
+    node = element doc "div" [("class", "bar")] []
+    width barCtx = "width: " ++ toText (List.at index (bench.meals.barWidths (totals barCtx)) |> Optional.getOrElse 0) ++ "%"
+    bench.sig.dynAttr inner node "style" width
+    node
+  macros inner = [element doc "div" [("class", "macros")] (List.map (bar inner) (List.range 0 4))]
+  bench.sig.show ctx section (Some toggle) (inner -> bench.sig.get inner macrosOpen) macros
+  slotsOf inner = match bench.sig.get inner dayMemo with
+    Some (_, slots) -> slots
+    None -> []
+  slotKey = cases (slot, _) -> bench.meals.Slot.id slot
+  renderSlot inner = cases (slot, _) -> bench.sig.meals.slotView page dayMemo tray inner (bench.meals.Slot.id slot)
+  bench.sig.each ctx slotsBox slotsOf slotKey renderSlot
+  section
+
+{{ One grocery item, built once: its count is an effect on `items`, the list it is in. The same markup as {bench.meals.groceryView}'s items. }}
+bench.sig.meals.itemView : bench.sig.meals.Page -> bench.sig.Signal [(Text, Nat)] -> bench.sig.Ctx -> Text ->{JS} JSValue
+bench.sig.meals.itemView page items ctx name =
+  use Text ++
+  use bench.sig element textNode
+  doc = bench.sig.meals.Page.document page
+  checked = bench.sig.meals.Page.checked page
+  count inner = List.find (cases (other, _) -> other Text.== name) (bench.sig.get inner items) |> Optional.map at2 |> Optional.getOrElse 0
+  quantity inner = "×" ++ Nat.toText (count inner)
+  toggle _ =
+    names = bench.sig.Signal.peek checked
+    bench.sig.Signal.set checked (if List.contains name names then List.filter (other -> other Text.!= name) names else names List.:+ name)
+  element doc "li" [("class", "item"), ("data-name", name)] [
+    bench.sig.meals.button doc [("class", "check")] "✓" toggle,
+    element doc "span" [("class", "name")] [textNode doc name],
+    element doc "span" [("class", "qty")] [bench.sig.dynText doc ctx quantity]]
+
+{{ One aisle, built once: a keyed list of a memo of its items. The same markup as {bench.meals.groceryView}'s sections. }}
+bench.sig.meals.aisleView : bench.sig.meals.Page -> bench.sig.Signal ([(Text, [(Text, Nat)])], [(Text, Nat)]) -> bench.sig.Ctx -> Text ->{JS} JSValue
+bench.sig.meals.aisleView page sections ctx aisle =
+  use bench.sig element textNode
+  doc = bench.sig.meals.Page.document page
+  findItems inner = List.find (cases (other, _) -> other Text.== aisle) (at1 (bench.sig.get inner sections)) |> Optional.map at2 |> Optional.getOrElse []
+  items = bench.sig.memo ctx findItems
+  list = element doc "ul" [] []
+  render inner = cases (name, _) -> bench.sig.meals.itemView page items inner name
+  bench.sig.each ctx list (inner -> bench.sig.get inner items) (cases (name, _) -> bench.sig.meals.keyOf bench.meals.ingredients name) render
+  element doc "section" [("class", "aisle")] [element doc "h4" [] [textNode doc aisle], list]
+
+{{ The grocery list: the aisles and the checked items, each a keyed list of a memo of {bench.meals.grocerySections}. The aisles sit in a `div.aisles` of their own, before `#checked`. }}
+bench.sig.meals.groceryView : bench.sig.meals.Page -> bench.sig.Ctx ->{JS} [JSValue]
+bench.sig.meals.groceryView page ctx =
+  use bench.sig element textNode
+  doc = bench.sig.meals.Page.document page
+  counts = bench.sig.memo ctx (inner -> bench.meals.groceryCounts (bench.sig.get inner (bench.sig.meals.Page.resolved page)))
+  sectionsOf inner =
+    countsNow = bench.sig.get inner counts
+    bench.meals.grocerySections countsNow (bench.sig.get inner (bench.sig.meals.Page.checked page))
+  sections = bench.sig.memo ctx sectionsOf
+  done = bench.sig.memo ctx (inner -> at2 (bench.sig.get inner sections))
+  aislesBox = element doc "div" [("class", "aisles")] []
+  renderAisle inner = cases (aisle, _) -> bench.sig.meals.aisleView page sections inner aisle
+  bench.sig.each ctx aislesBox (inner -> at1 (bench.sig.get inner sections)) (cases (aisle, _) -> bench.sig.meals.keyOf bench.meals.aisles aisle) renderAisle
+  doneList = element doc "ul" [] []
+  renderDone inner = cases (name, _) -> bench.sig.meals.itemView page done inner name
+  bench.sig.each ctx doneList (inner -> bench.sig.get inner done) (cases (name, _) -> bench.sig.meals.keyOf bench.meals.ingredients name) renderDone
+  [aislesBox, element doc "section" [("id", "checked")] [element doc "h4" [] [textNode doc "Checked"], doneList]]
+
+{{ The recipe search: an input, a note and the matching recipes, keyed by catalog index. The matches are a memo of the query, which the note reads with them, so a key press runs the note once. The same markup as {bench.meals.searchView}. }}
+bench.sig.meals.searchView : JSValue -> [bench.meals.Recipe] -> bench.sig.Ctx ->{JS} JSValue
+bench.sig.meals.searchView doc recipes ctx =
+  use Nat toText
+  use Text ++
+  use bench.sig element textNode
+  query = bench.sig.Signal.new ""
+  matching inner =
+    q = bench.sig.get inner query
+    (q, List.indexed recipes |> List.filter (cases (recipe, _) -> Text.contains q (bench.meals.Recipe.name recipe)))
+  results = bench.sig.memo ctx matching
+  noteText inner =
+    (q, found) = bench.sig.get inner results
+    "Showing " ++ toText (List.size found) ++ " of " ++ toText (List.size recipes) ++ " for \"" ++ q ++ "\""
+  input = element doc "input" [("id", "search-input"), ("type", "search")] []
+  onInput event = bench.sig.Signal.set query (JSValue.asText! (event :: "target" :: "value"))
+  JSValue.invokeTextVal_ "addEventListener" "input" (JSValue.callback1_ onInput) input
+  list = element doc "ul" [("id", "results")] []
+  renderResult _ = cases
+    (recipe, _) ->
+      element doc "li" [("class", "result")] [
+        element doc "span" [("class", "name")] [textNode doc (bench.meals.Recipe.name recipe)],
+        element doc "span" [("class", "kcal")] [textNode doc (toText (bench.meals.Recipe.kcal recipe) ++ " kcal")],
+        bench.sig.meals.button doc [("class", "add")] "Add" (do ())]
+  bench.sig.each ctx list (inner -> at2 (bench.sig.get inner results)) at2 renderResult
+  element doc "div" [("id", "search")] [input, element doc "p" [("id", "search-note")] [bench.sig.dynText doc ctx noteText], list]
+
+{{
+The meals page in a signals style, on `root`: the plan, the pose and the checked items are signals, and the week, each day and each meal read memos of the plan, so an edit runs only the effects whose values changed. Moving a day runs the same FLIP spring as {bench.meals.ui}, by calling its measuring halves directly. The same markup as {bench.meals.ui}, but for a `div.days`, a `div.slots` per day and a `div.aisles` around the keyed lists.
+}}
+bench.sig.meals.mount : JSValue ->{JS} ()
+bench.sig.meals.mount root =
+  use Text ==
+  use bench.sig element
+  doc = global "document"
+  recipes = bench.meals.catalog()
+  plan = bench.sig.Signal.new None
+  pose = bench.sig.Signal.new "idle"
+  checked = bench.sig.Signal.new []
+  ctx = SigCtx (bench.sig.Owner.new()) None
+  resolveWeek inner = match bench.sig.get inner plan with
+    Some week -> List.map (day -> (day, bench.meals.resolve recipes day)) (bench.meals.Plan.days week)
+    None -> []
+  resolved = bench.sig.memo ctx resolveWeek
+  page = bench.sig.meals.Page.Page doc plan checked resolved
+  hasPlan = bench.sig.memo ctx (inner -> Optional.isSome (bench.sig.get inner plan))
+  planWeek _ = bench.sig.Signal.set plan (Some (bench.meals.Plan.draw 42))
+  replan _ = bench.sig.meals.editPlan page bench.meals.Plan.replan
+  moveDay _ =
+    first = bench.meals.flipPositions()
+    bench.meals.onFrame do bench.meals.flipLast first
+    bench.sig.meals.editPlan page bench.meals.Plan.rotate
+  wave _ = bench.sig.Signal.set pose (if bench.sig.Signal.peek pose == "idle" then "wave" else "idle")
+  buttons =
+    element doc "div" [("class", "buttons")] [
+      bench.sig.meals.button doc [("id", "plan")] "Plan my week" planWeek,
+      bench.sig.meals.button doc [("id", "replan")] "Re-plan" replan,
+      bench.sig.meals.button doc [("id", "move")] "Move Monday to the end" moveDay,
+      bench.sig.meals.button doc [("id", "pose")] "Wave" wave]
+  mascot = element doc "div" [("id", "mascot"), ("class", "mascot")] []
+  bench.sig.dynAttr ctx mascot "data-pose" (inner -> bench.sig.get inner pose)
+  JSValue.setPropertyText "innerHTML" bench.meals.mascotSvg mascot
+  week = element doc "div" [("id", "week")] []
+  weekContent inner =
+    total = element doc "p" [("id", "week-total")] [bench.sig.dynText doc inner (totalCtx -> bench.meals.weekText (bench.sig.get totalCtx resolved))]
+    daysBox = element doc "div" [("class", "days")] []
+    renderDay dayCtx = cases (day, _) -> bench.sig.meals.dayView page dayCtx (bench.meals.Day.id day)
+    bench.sig.each inner daysBox (listCtx -> bench.sig.get listCtx resolved) (cases (day, _) -> bench.meals.Day.id day) renderDay
+    [total, daysBox]
+  bench.sig.show ctx week None (inner -> bench.sig.get inner hasPlan) weekContent
+  grocery = element doc "div" [("id", "grocery")] []
+  bench.sig.show ctx grocery None (inner -> bench.sig.get inner hasPlan) (bench.sig.meals.groceryView page)
+  app = element doc "div" [("id", "app")] [buttons, mascot, week, grocery, bench.sig.meals.searchView doc recipes ctx]
+  JSValue.invoke1_ "appendChild" app root
+
+{{ `run bench.sig.meals.build <bare|debug> <outDir>`: the meals page in a signals style, written as `meals-<config>`. }}
+bench.sig.meals.build : '{IO, Exception} ()
+bench.sig.meals.build = do
+  use Text ++
+  start _ = bench.sig.meals.mount (global "document" :: "body")
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("meals-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+
+---
+{{
+A minimal signals core, Leptos's model in Unison: a view is built once, and each piece of it that depends on a signal is an effect that updates its own DOM node when the signal changes. Nothing is diffed and no body runs again.
+
 An effect is an observer: a flag that is cleared when its owner is disposed, and the body that runs it again. Subscriptions are consumed when they fire: setting a signal empties its list and runs each live observer, which subscribes again as it reads. So an effect that stops reading a signal stops hearing from it, with no list of sources kept.
 }}
 type bench.sig.Observer = SigObserver (Ref JS Boolean) (Ref JS bench.sig.Body)

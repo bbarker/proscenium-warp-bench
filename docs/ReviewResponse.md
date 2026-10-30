@@ -28,10 +28,10 @@ And three directions to decide on, with the measurements below:
 - **A tree of Proscenium's own in place of ink.** A first prototype runs every app
   unchanged: both rows apps, the cards page, the meals page and js-framework-benchmark's.
   It beats ink on almost every operation.
-- **Signals.** A minimal signals core on today's warp runs the rows suite at Leptos's
-  speed, with a sixth of the tree's heap. Carrying its context in an ability costs 7–10%
-  on building, and implicits would cost nothing at runtime ("Signals, without
-  implicits", below).
+- **Signals.** A minimal signals core on today's warp runs the rows suite at about
+  Leptos's speed, with a fifth of the tree's heap, and runs the meals page too. Carrying
+  its context in an ability costs up to 10% on building, and implicits would cost nothing
+  at runtime ("Signals, without implicits", below).
 - **One-shot stack switching.** It would be enough for ink and Proscenium: nothing in
   them resumes a continuation twice. Today it would not make them faster, and nor would
   a direct path for handlers that resume once ("What is left", below).
@@ -290,23 +290,29 @@ You asked about signals and implicits. We built the smallest signals core we cou
 `bench.sig` on Proscenium `perf-r7-signals` (`docs/Signals.md`), in Leptos's model:
 - **The model:** a view is built once, and each part that depends on a signal is an
   effect that updates its own DOM node.
-- **The pieces:** owners, a keyed selector, and a keyed list with the tree's reconcile.
+- **The pieces:** memos, owners, a keyed selector, conditional content, and a keyed list
+  with the tree's reconcile.
 
 The rows app is written on it twice: with the reactive context passed explicitly, and
-carried by an ability with one operation. Both match Leptos. The rows suite, median ms:
+carried by an ability with one operation. The meals page is written on it once. All three
+match Leptos. The rows suite, median ms:
 
 | | Leptos | Round 7 on ink | The tree | Signals, explicit | Signals, ability |
 | --- | --- | --- | --- | --- | --- |
-| create 1,000 | 28.0 | 82.4 | 70.0 | 29.7 | 32.8 |
-| update every 10th | 1.0 | 7.7 | 5.9 | 1.0 | 1.1 |
-| select | 0.6 | 0.8 | 0.7 | 0.4 | 0.5 |
-| create 10,000 | 171 | 617 | 433 | 164 | 178 |
-| heap at 10,000 (MB) | 9.7 + 21.8 linear | 142 | 121 | 22 | 23 |
+| create 1,000 | 26.4 | 79.9 | 69.2 | 31.2 | 30.2 |
+| update every 10th | 0.7 | 7.4 | 5.9 | 0.8 | 0.9 |
+| select | 0.6 | 0.7 | 0.7 | 0.4 | 0.4 |
+| create 10,000 | 161 | 558 | 419 | 155 | 169 |
+| heap at 10,000 (MB) | 9.7 + 21.8 linear | 142 | 121 | 25 | 26 |
 
-- **Signals reach Leptos's speed on today's warp,** with no change to warp. The setup per
-  row costs less than a virtual DOM's, so on these apps the tradeoff you described does
-  not bite.
-- **An ability carries the context for 7–10% on building, nothing on updates.** No
+On the meals page, a meal's edit is the fastest of the four builds (adding a serving
+0.5 ms, Leptos 1.3), and planning the week takes 6.0 ms against Leptos's 5.1 and the
+tree's 9.3.
+
+- **Signals reach about Leptos's speed on today's warp,** with no change to warp. The
+  setup per row costs less than a virtual DOM's, so on these apps the tradeoff you
+  described does not bite.
+- **An ability carries the context for up to 10% on building, nothing on updates.** No
   implicits are needed to keep components free of a context argument.
 - **Implicits would run as explicit passing does:** the RFC (unisonweb/unison #6238)
   elaborates a given to an ordinary argument. Without context functions in its v1, each

@@ -231,17 +231,19 @@ repeat it.
 - **A signals UI on today's warp runs at Leptos's speed** ("Signals, without implicits",
   `docs/Signals.md`). A minimal signals core in Leptos's model, with views built once and
   effects that update their own DOM nodes, runs the rows suite:
-  - **Creating 1,000 rows:** 29.7 ms against Leptos's 28.0, round 7's 82.4 and the tree's
-    70.0.
-  - **Update every 10th:** 1.0 against 1.0.
-  - **Creating 10,000 rows:** 164 against 171.
-  - **Heap at 10,000 rows:** 22 MB against the tree's 121, and less than Leptos's JS heap
+  - **Creating 1,000 rows:** 31.2 ms against Leptos's 26.4, round 7's 79.9 and the tree's
+    69.2.
+  - **Update every 10th:** 0.8 against 0.7.
+  - **Creating 10,000 rows:** 155 against 161.
+  - **Heap at 10,000 rows:** 25 MB against the tree's 121, and less than Leptos's JS heap
     and linear memory together.
-  - **The module:** 19.7 KB brotli.
+  - **The module:** 19.9 KB brotli.
 
-  Nothing in warp changed: the cost measured in rounds 1 to 7 was the virtual DOM over
-  ink. Carrying the reactive context in an ability instead of an argument costs 7–10% on
-  building and nothing on updates. Implicits would run as explicit passing does.
+  The meals page on the same core makes a meal's edit the fastest of the four builds,
+  and plans the week in 6.0 ms against Leptos's 5.1. Nothing in warp changed: the cost
+  measured in rounds 1 to 7 was the virtual DOM over ink. Carrying the reactive context
+  in an ability instead of an argument costs up to 10% on building and nothing on
+  updates. Implicits would run as explicit passing does.
 - **Neither handler shortcut would pay yet.**
   - **A direct path for handlers that resume once:** every one of the 41 operations a
     row has the shape ("Handlers that resume once"). But an operation costs about 70 ns
@@ -2386,36 +2388,59 @@ row is in ink's bookkeeping and the DOM, which the tree prototype removed for 32
 Phase 6, reopened by the measurement above, is written up in `docs/Signals.md`.
 `bench.sig` (`@dfreeman/proscenium/perf-r7-signals`) is a minimal signals core in
 Leptos's model. A view is built once, and each part that depends on a signal is an effect
-that updates its own DOM node. It has owners, a keyed selector and a keyed list with the
-tree's reconcile. The rows app is written on it twice: with the reactive context passed
-explicitly, and carried by an ability (`Reactive`, one operation). Both match Leptos over
-200 steps on two seeds.
+that updates its own DOM node. It has memos, owners, a keyed selector, conditional
+content, and a keyed list with the tree's reconcile.
 
-The rows suite, 9 interleaved runs at load about 4 (`results/round7-signals-rows.json`),
+On it:
+- **The rows app,** twice: with the reactive context passed explicitly, and carried by an
+  ability (`Reactive`, one operation). Both match Leptos over 200 steps on two seeds.
+- **The meals page,** with explicit passing. It matches Leptos over 120 steps on two
+  seeds.
+
+The meals page found a flaw in the first version of the core. An effect that read two
+signals re-subscribed to both on every run, so the one that did not fire piled up
+subscriptions until the page stopped answering. Each subscription now records the run
+that made it.
+
+The rows suite, 9 interleaved runs at load about 2 (`results/round7-signals-rows.json`),
 median ms until the DOM is done:
 
 | Operation | Leptos | Round 7 on ink | The tree | **Signals, explicit** | **Signals, ability** |
 | --- | --- | --- | --- | --- | --- |
-| create 1,000 | 28.0 | 82.4 | 70.0 | **29.7** | 32.8 |
-| append 1,000 | 19.1 | 52.8 | 38.2 | **15.5** | 16.8 |
-| update every 10th | 1.0 | 7.7 | 5.9 | **1.0** | 1.1 |
-| select a row | 0.6 | 0.8 | 0.7 | **0.4** | 0.5 |
-| swap rows | 0.7 | 5.4 | 1.8 | 2.2 | **1.7** |
-| remove a row | 0.9 | 5.9 | 2.1 | **1.1** | 1.2 |
-| create 10,000 | 170.9 | 617.3 | 433.0 | **163.8** | 178.3 |
-| clear 10,000 | 86.3 | 116.5 | 175.1 | 61.6 | **59.3** |
-| heap at 10,000 rows (MB) | 9.7 + 21.8 linear | 142.0 | 120.5 | **21.9** | 22.8 |
+| create 1,000 | 26.4 | 79.9 | 69.2 | **31.2** | 30.2 |
+| append 1,000 | 18.5 | 47.3 | 35.5 | **14.0** | 15.6 |
+| update every 10th | 0.7 | 7.4 | 5.9 | **0.8** | 0.9 |
+| select a row | 0.6 | 0.7 | 0.7 | **0.4** | 0.4 |
+| swap rows | 0.6 | 4.0 | 1.8 | 2.1 | 2.3 |
+| remove a row | 1.0 | 4.5 | 1.8 | **1.0** | 1.1 |
+| create 10,000 | 161.1 | 557.6 | 419.4 | **154.8** | 169.1 |
+| clear 10,000 | 80.6 | 110.6 | 169.0 | 59.1 | **57.7** |
+| heap at 10,000 rows (MB) | 9.7 + 21.8 linear | 141.7 | 120.5 | **25.4** | 26.3 |
 
-The module is 19.7 KB brotli, and warp builds it in 0.26 s.
+The meals suite, at load about 2.5 (`results/round7-signals-meals.json`):
 
-- **On today's warp, a signals UI runs at Leptos's speed.** Creating and updating rows
-  take about Leptos's time, appending and clearing take less, and the heap at 10,000 rows
-  is smaller than Leptos's JS heap and linear memory together. Nothing in warp changed.
-  What rounds 1 to 7 measured was the cost of a virtual DOM over ink.
+| Operation | Leptos | Round 7 on ink | The tree | **Signals** |
+| --- | --- | --- | --- | --- |
+| ready | 21.7 | 47.4 | 38.2 | **31.0** |
+| plan the week | 5.1 | 9.5 | 9.3 | **6.0** |
+| add a serving | 1.3 | 1.0 | 0.6 | **0.5** |
+| remove a meal | 1.4 | 2.2 | **0.7** | **0.7** |
+| check an item | 0.4 | 0.8 | 0.5 | **0.3** |
+| move a day (FLIP) | 2.0 | 1.6 | 1.1 | **0.9** |
+| clear the search | 2.2 | 9.3 | 6.2 | **2.9** |
+
+The modules are 19.9 KB (rows) and 29.1 KB (meals) brotli.
+
+- **On today's warp, a signals UI runs at about Leptos's speed.** On the rows suite,
+  creating and updating rows take about Leptos's time, and appending and clearing take
+  less. The heap at 10,000 rows is less than Leptos's JS heap and linear memory together.
+  On the meals page, a meal's edit is the fastest of the four, and planning the week is
+  close to Leptos. Nothing in warp changed: what rounds 1 to 7 measured was the cost of
+  a virtual DOM over ink.
 - **The author's tradeoff does not bite here.** A signal, two effects, an owner and a
   selector entry per row cost less to set up than a tree of memo nodes, and the updates
   are as cheap as signals promise.
-- **An ability carries the context for 7–10% on building and nothing on updates.**
+- **An ability carries the context for up to 10% on building and nothing on updates.**
   Implicits, under the open RFC (unisonweb/unison #6238), elaborate to ordinary arguments,
   so they would run as explicit passing does. Without context functions in its v1, each
   effect would still bind its context by hand.
@@ -2438,8 +2463,8 @@ boundary (round 7).
    js-framework-benchmark app unchanged.
    - **Or signals,** for the larger step: views built once and updated by effects reach
      Leptos's speed on the rows suite ("Signals, without implicits"). That is a
-     different programming model from `useState` and re-rendered bodies. The next
-     measurements would be the meals page in that style, and whether a `useState` whose
+     different programming model from `useState` and re-rendered bodies. The meals page
+     in that style is measured too. The next question is whether a `useState` whose
      readers are effects can keep Proscenium's API.
 2. **warp: continuation handling.**
    - Compiling a handler that resumes once, in tail position, as a direct call is
