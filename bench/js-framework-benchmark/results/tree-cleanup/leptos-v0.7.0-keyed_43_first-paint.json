@@ -1,0 +1,1 @@
+{"framework":"leptos-v0.7.0-keyed","keyed":true,"benchmark":"43_first-paint","type":"size","values":{"DEFAULT":{"min":358.2,"max":358.2,"median":358.2,"mean":358.2,"stddev":null,"values":[358.2]}}}

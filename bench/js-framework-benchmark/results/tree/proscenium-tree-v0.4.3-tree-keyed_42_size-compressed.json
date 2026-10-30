@@ -1,0 +1,1 @@
+{"framework":"proscenium-tree-v0.4.3-tree-keyed","keyed":true,"benchmark":"42_size-compressed","type":"size","values":{"DEFAULT":{"min":40.8,"max":40.8,"median":40.8,"mean":40.8,"stddev":null,"values":[40.8]}}}

@@ -248,8 +248,18 @@ Against that app on ink:
   - create 10,000 rows: 389 against 571.
 
 The 400-card page runs on it too, unchanged. Its markup matches round 7's at every step,
-and it is ready in 82 ms against ink's 88. Effects and cleanups aren't in it yet, so the
-meals page doesn't run on it.
+and it is ready in 82 ms against ink's 88.
+
+So does js-framework-benchmark's app, as `keyed/proscenium-tree`. Its first run found
+a leak, removed rows' cells kept alive. With cleanup, each element's cells now live in its
+mounted node. The suite, against round 7 on ink:
+- **Faster on the tree** on everything but select (level) and clearing (twice as slow,
+  from the per-row unsubscribes): create 1,000 136 against 151 ms, create 10,000 1,329
+  against 1,481.
+- **Memory after create and clear:** 0.96 MB against 1.58.
+- **Size:** 42 KB against 54, smaller than Leptos's 49.
+
+Effects aren't in it yet, so the meals page doesn't run on it.
 
 ## One-shot continuations
 

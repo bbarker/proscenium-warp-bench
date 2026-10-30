@@ -193,10 +193,20 @@ That app runs on it unchanged:
   571. The 400-card page runs on it too, ready in 82 ms against ink's 88.
 
 Not in the prototype yet:
-- `Effect`, `onCleanup`, namespaces, and payloads other than a click's. So the meals app
-  doesn't run on it. The 400-card page does, since it needs only elements, text,
-  `useState` and clicks.
-- Cells and registry entries of removed elements are not dropped.
+- `Effect`, namespaces, and payloads other than a click's. So the meals app doesn't run on
+  it. The 400-card page does, since it needs only elements, text, `useState` and clicks.
+
+**Cleanup, and cells in the mounted tree.** js-framework-benchmark's create-and-clear
+memory found the tree keeping removed rows' cells: 61.6 MB. The fix answers this note's
+open question about naming nodes:
+- **Where cells live:** each memo carries a small store of its own cells. Its view takes
+  the store, so a re-render finds its cells there.
+- **Messages:** a message names the store and the path.
+- **Unmounting:** walks a removed subtree, queues each store's cleanups, and makes one
+  registry delete per owner.
+
+Memory after clearing is now 0.96 MB against ink's 1.58. Clearing rows remains about
+twice ink's time: each removed row runs two store unsubscribes through the provider.
 
 ## Open questions for the prototype
 

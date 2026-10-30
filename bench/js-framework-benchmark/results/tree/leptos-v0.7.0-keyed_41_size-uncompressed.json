@@ -1,0 +1,1 @@
+{"framework":"leptos-v0.7.0-keyed","keyed":true,"benchmark":"41_size-uncompressed","type":"size","values":{"DEFAULT":{"min":189.6,"max":189.6,"median":189.6,"mean":189.6,"stddev":null,"values":[189.6]}}}

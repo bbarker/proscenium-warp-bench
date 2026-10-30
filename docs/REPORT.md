@@ -2138,6 +2138,76 @@ clicks. Its markup matches round 7's at every step of the toggle script, and at 
 (`results/round7-tree-cards.json`):
 - **Page ready:** 82.3 ms on the tree, against 87.6 on ink and 261.1 for Leptos.
 - **Toggles:** 1.1 ms against 1.4, 0.2 against 0.4, and 0.2 against 0.2, to the DOM.
+
+#### In js-framework-benchmark, and the cleanup it exposed
+
+`bench.jfb.ui`, the suite's app, runs on the tree unchanged as `keyed/proscenium-tree`,
+which passes `isKeyed`. The first run, 5 iterations at load 2–4
+(`bench/js-framework-benchmark/results/tree/`), was faster than round 7 on ink in most
+benchmarks. But **memory after creating and clearing rows was 61.6 MB, against 1.6 on
+ink**: the tree never dropped the cells or the registry entries of removed elements.
+
+Dropping them correctly means running each removed cell's `onCleanup` (a store's
+unsubscribe), deleting the cell and unregistering its owner. The first version did that
+through global maps keyed by path, and clearing became the slow operation: 2,000 rows took
+58 ms against 13 without cleanup (`results/round7-tree-cleanup-rows.json`), at 2.5
+million allocations. Two guesses about why were tested and were wrong:
+- **Comparing long paths:** keys stored leaf first changed nothing
+  (`round7-tree-leaffirst-rows.json`).
+- **Running cleanups deep in the patch:** queuing them until the patch is done changed
+  nothing either.
+
+The counters showed the cost was the maps themselves, about seven operations on persistent
+maps per removed row.
+
+**The fix keeps each element's cells in its mounted node.** A memo carries a small store
+of its own cells, by path. Its view takes the store, so a re-render finds its cells
+there, and a message names the store and the path, so no map of all cells exists.
+Unmounting walks the removed subtree, queues each store's cleanups, and makes one
+registry delete per owner. This is the plan's stable-id item, done as cells carried in
+the mounted tree rather than a numbered path.
+
+Clearing 2,000 rows (`results/sites-rows-tree.json`):
+
+| | Function entries | Allocations |
+| --- | --- | --- |
+| no cleanup | 264,096 | 211,546 |
+| cleanup through global maps | 3,286,420 | 2,509,427 |
+| cells in the mounted tree | 1,734,188 | 1,776,667 |
+| ink (round 7) | 1,289,116 | 1,332,734 |
+
+Replacing 1,000 rows now allocates less than ink, 4.28 million against 5.39. Both rows
+apps still match Leptos over 200 steps on two seeds, and the cards markup matches round
+7's at every step.
+
+The suite on that build, run together with round 7 and Leptos, 5 iterations at load 4–6
+(`bench/js-framework-benchmark/results/tree-cleanup/`, total time to paint, ms):
+
+| Benchmark | Round 7 on ink | **On the tree** | Leptos 0.7.0 |
+| --- | --- | --- | --- |
+| create 1,000 rows | 151.1 | **135.9** | 76.9 |
+| replace 1,000 rows | 169.9 | **151.6** | 86.8 |
+| update every 10th (×16) | 77.4 | **62.5** | 35.3 |
+| select a row | 8.7 | 9.0 | 8.8 |
+| swap two rows | 70.8 | **63.7** | 38.6 |
+| remove a row | 56.0 | **45.4** | 32.3 |
+| create 10,000 rows | 1,480.9 | **1,328.5** | 856.1 |
+| append 1,000 rows | 169.9 | **153.1** | 92.1 |
+| clear 1,000 rows (×8) | **71.6** | 141.2 | 41.8 |
+| memory, ready (MB) | **0.85** | 0.88 | 1.79 |
+| memory, 1,000 rows (MB) | 15.34 | **14.11** | 5.44 |
+| memory, after create and clear (MB) | 1.58 | **0.96** | 4.59 |
+| size, compressed (KB) | 54.3 | **41.7** | 48.8 |
+| first paint | 315.7 | **264.9** | 358.2 |
+
+**On the suite's own measures, the tree beats round 7 on ink everywhere except select
+(level) and clearing (twice as slow).** The bundle is smaller than Leptos's, and so is
+the memory left after clearing.
+
+Clearing is the cost of running a cleanup per removed row, an ability operation to the
+provider for each of the row's two stores, plus queueing them in a list. ink does the
+same unsubscribes in fewer allocations. Running a store's cleanups in one batch per
+store would be the next change.
 - **The cost of registering owners** is a map entry per row, which the build of 10,000
   rows pays: its heap is 144 MB here against 94 MB for the plain app on the tree.
 

@@ -1,0 +1,1 @@
+{"framework":"proscenium-tree-v0.4.3-tree-keyed","keyed":true,"benchmark":"25_run-clear-memory","type":"memory","values":{"DEFAULT":{"min":61.60599136352539,"max":61.60802459716797,"median":61.60738754272461,"mean":61.607222175598146,"stddev":0.000747881225038833,"values":[61.60726261138916,61.60599136352539,61.60738754272461,61.607444763183594,61.60802459716797]}}}
