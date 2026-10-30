@@ -75,6 +75,9 @@ function implementations(app) {
 }
 
 const COUNTING = process.env.BENCH_COUNT === "1";
+// BENCH_INTERLEAVE=1 runs one iteration of each implementation in turn instead
+// of all of one implementation's iterations together.
+const INTERLEAVED = process.env.BENCH_INTERLEAVE === "1";
 
 // Installed before the page's script when counting. An import is labelled by
 // its name when the name is readable (`##Nat.toText`), and otherwise (warp's
@@ -276,8 +279,11 @@ const median = (values) => {
 };
 const round = (value) => Math.round(value * 100) / 100;
 
-async function runImplementation(browser, base, name, path, operations, iterations) {
-  const samples = {};
+const summarise = (samples) => Object.fromEntries(Object.entries(samples).map(([key, values]) => [key, {
+  median: round(median(values)), min: round(Math.min(...values)), max: round(Math.max(...values)),
+}]));
+
+async function runImplementation(browser, base, name, path, operations, iterations, samples = {}) {
   const add = (key, value) => { (samples[key] ??= []).push(value); };
   // With BENCH_COUNT, each operation's counts from the last iteration, and
   // the site counters of a module instrument.nu rewrote, under `sites`.
@@ -328,13 +334,12 @@ async function runImplementation(browser, base, name, path, operations, iteratio
     await context.close();
   }
   if (COUNTING) return counts;
-  return Object.fromEntries(Object.entries(samples).map(([key, values]) => [key, {
-    median: round(median(values)), min: round(Math.min(...values)), max: round(Math.max(...values)),
-  }]));
+  return summarise(samples);
 }
 
 async function main() {
   const [suite = "rows", iterationArg = "7"] = process.argv.slice(2);
+  const loadAtStart = loadavg().map(round);
   const iterations = Number(iterationArg);
   const operations = suite.startsWith("cards-") ? cardsSuite(Number(suite.slice(6))) : SUITES[suite];
   if (!operations) throw new Error(`unknown suite ${suite}`);
@@ -353,15 +358,27 @@ async function main() {
   const results = {};
   const version = browser.version();
   try {
-    for (const name of Object.keys(available)) {
-      results[name] = await runImplementation(browser, base, name, `/${name}.html`, operations, iterations);
+    if (INTERLEAVED && !COUNTING) {
+      // One iteration of each implementation in turn, so a change in the
+      // machine's load during the run reaches every implementation alike.
+      const samples = Object.fromEntries(Object.keys(available).map((name) => [name, {}]));
+      for (let iteration = 0; iteration < iterations; iteration += 1) {
+        for (const name of Object.keys(available)) {
+          await runImplementation(browser, base, name, `/${name}.html`, operations, 1, samples[name]);
+        }
+      }
+      for (const name of Object.keys(available)) results[name] = summarise(samples[name]);
+    } else {
+      for (const name of Object.keys(available)) {
+        results[name] = await runImplementation(browser, base, name, `/${name}.html`, operations, iterations);
+      }
     }
   } finally {
     await browser.close();
     server.close();
   }
   const line = { suite, iterations, at: new Date().toISOString(), load: loadavg().map(round), cpus: cpus().length,
-    chromium: version, results };
+    chromium: version, interleaved: INTERLEAVED, loadAtStart, results };
   if (COUNTING) {
     await writeFile(join(here, "results", `boundary-${suite}.json`), JSON.stringify({ ...line, kind: "boundary counts" }, null, 1) + "\n");
   } else {

@@ -160,6 +160,33 @@ scratch/main> clone @dfreeman/warp/releases/1.3.0 @dfreeman/warp/perf-r4
 @dfreeman/proscenium/perf-r5m> compile bench.meals.build target/unison/frontend-bench/meals-build-r5i
 ```
 
+## Round 7, after the author's review (2026-10-30)
+
+- [ ] warp, from `perf-r4` (the warp under round 5): the JS interop functions take their
+      arguments unboxed (`internal.Replacement.jsUnboxed`), and `==` compares a function
+      with a closure by id in wasm. Run `tests` with binaryen 133 first on the PATH.
+
+```ucm
+@dfreeman/warp/perf-r4> branch /perf-r7
+@dfreeman/warp/perf-r7> load unison/scratch/warp--perf-r7.u
+@dfreeman/warp/perf-r7> update
+@dfreeman/warp/perf-r7> run tests
+```
+
+- [ ] Proscenium, from `perf-r5m` (round 5 and the meals page), with that warp:
+
+```ucm
+@dfreeman/proscenium/perf-r5m> branch /perf-r7
+@dfreeman/proscenium/perf-r7> fork @dfreeman/warp/perf-r7: lib.dfreeman_warp_r7
+@dfreeman/proscenium/perf-r7> upgrade dfreeman_warp_r4 dfreeman_warp_r7
+@dfreeman/proscenium/perf-r7> compile bench.rowsfg.build target/unison/frontend-bench/rows-build-r7
+@dfreeman/proscenium/perf-r7> compile bench.cards.s400i.build target/unison/frontend-bench/cards-400-build-r7
+@dfreeman/proscenium/perf-r7> compile bench.meals.build target/unison/frontend-bench/meals-build-r7
+```
+
+In the original working copy, the warp lib on `perf-r7` is `dfreeman_warp_r7b`. It was
+forked a second time after the equality fix was corrected to build on round 4's version.
+
 Suggested `history.comment` lines:
 
 - ink/perf: `keyed reconcile in O(n log n) by longest increasing run, new children move with a moved predecessor; compute_ lets a message re-run only the computation owning its cell`
@@ -172,3 +199,5 @@ Suggested `history.comment` lines:
 - proscenium/perf-r5: `DOM sync builds new subtrees bottom-up, by identity of the keys ink places children under, and batches removals under one parent`
 - warp/perf-r5: `List.:+ appends in place into a leaf's spare capacity, marked by a hole value`
 - proscenium/perf-r5m: `bench.meals: a meal planner page (week of day cards with totals, grocery list, recipe search, FLIP-animated day move, CSS-animated SVG mascot) and its timed build entry`
+- warp/perf-r7: `JS interop builtins take unboxed arguments and box their results in wasm (jsUnboxed); == compares a function with a closure by id in wasm`
+- proscenium/perf-r7: `perf-r5m on warp perf-r7`

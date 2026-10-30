@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>Proscenium-"keyed"</title>
+    <base href="bundled-dist/"></base>
+    <link href="/css/currentStyle.css" rel="stylesheet"/>
+    <link rel="modulepreload" href="./jfb.loader.min.js" />
+  </head>
+  <body>
+    <div id='main'></div>
+    <script type="module">
+      import { loadUnisonModule } from './jfb.loader.min.js';
+      const { exports } = await loadUnisonModule(fetch('./jfb.opt.wasm'));
+      exports.main();
+    </script>
+  </body>
+</html>

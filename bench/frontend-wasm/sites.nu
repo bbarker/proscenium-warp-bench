@@ -11,6 +11,7 @@
 #
 #   nu bench/frontend-wasm/sites.nu rows [--top 4]
 #   nu bench/frontend-wasm/sites.nu rows --by-function [--top 15] [--operation "create 1k"]   # hot functions
+#   nu bench/frontend-wasm/sites.nu rows --results sites-rows-r7.json      # another run of the same suite
 #   nu bench/frontend-wasm/sites.nu self-test
 
 const HERE = path self | path dirname
@@ -66,8 +67,9 @@ def "main self-test" [] {
     print "sites.nu self-test passed"
 }
 
-def main [suite: string, --top: int = 4, --by-function, --operation: string = ""] {
-    let results = $HERE | path join "results" $"sites-($suite).json" | open | get results
+def main [suite: string, --top: int = 4, --by-function, --operation: string = "", --results: string = ""] {
+    let file = if $results == "" { $"sites-($suite).json" } else { $results }
+    let results = $HERE | path join "results" $file | open | get results
     $results | transpose impl data | where {|row| ($row.data | get --optional sites) != null } | each {|impl|
         let sites = site-map $suite $impl.impl
         let operations = $impl.data.sites | transpose operation counters

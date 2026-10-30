@@ -1,0 +1,742 @@
+{{
+A JS-implemented builtin whose arguments and result cross the wasm boundary unboxed, so the JS function makes no calls back into wasm to read or build them.
+
+Each parameter is passed according to its {type ValueType}:
+
+- `VText`: the JS string it holds;
+- `VForeign`: the `JSValue` wrapper it holds;
+- any other kind: the Unison value itself, opaque to JS. A function value passed this way can be handed to `rt.callDirect`.
+
+As for {jsFunction}, the JS function's first argument is the runtime. Its result is boxed in wasm:
+
+- `Some VForeign`: the `JSValue` the function returns;
+- `Some VText`: the string it returns;
+- `None`: its return value is ignored and the result is `()`.
+
+{jsFunction}'s glue reads each argument through an exported getter (`Text_getValue`, `Foreign_getValue`) and builds its result through another (`Foreign`, `Unit`). That made about four calls back into wasm for every DOM call a UI made.
+}}
+internal.Replacement.jsUnboxed : [ValueType] -> Optional ValueType -> Text -> Replacement
+internal.Replacement.jsUnboxed paramTypes resultType src =
+  arity = List.size paramTypes
+  builder name runtime =
+    use List +:
+    use Text ++
+    externRef = abs.ref extern
+    rt = import.global "runtime" "self" (global.const externRef)
+    results = match resultType with
+      None   -> []
+      Some _ -> [externRef]
+    params = (None, externRef) +: List.map (_ -> (None, externRef)) paramTypes
+    jsFunc = import.func.named ("js." ++ humanReadableID name) "js" (refToWasmID name) (func.Signature.Signature params results ())
+    (unitID, unitCtor) = constructorGlobal (termLink Unit)
+    pushArg = cases
+      (index, VText)    ->
+        getDirectArg index runtime
+        ref.cast (Runtime.valueRef VText runtime)
+        struct.get (Runtime.valueType VText runtime) 1
+      (index, VForeign) ->
+        getDirectArg index runtime
+        ref.cast (Runtime.valueRef VForeign runtime)
+        VForeign.getValue runtime
+        extern.convertAny()
+      (index, _)        ->
+        getDirectArg index runtime
+        extern.convertAny()
+    defDirectFunc name runtime arity do
+      match resultType with
+        Some ty -> pushTag ty
+        None    -> ()
+      global.get rt
+      List.zip (Nat.range 0 arity) paramTypes |> List.foreach pushArg
+      instr.call jsFunc
+      match resultType with
+        Some VForeign ->
+          any.convertExtern()
+          struct.new (Runtime.valueType VForeign runtime)
+        Some ty       -> struct.new (Runtime.valueType ty runtime)
+        None          ->
+          pushTag VData
+          global.get unitID
+          i32.const unitCtor
+          newFixed (Runtime.internalType Values runtime) 0
+          struct.new (Runtime.valueType VData runtime)
+  NativeTerm (SigDirect arity) (Some src) builder
+
+internal.runtime.replacements.warp_js.JSValue_getProperty : Replacement
+internal.runtime.replacements.warp_js.JSValue_getProperty =
+  jsUnboxed [VText, VForeign] (Some VForeign) "(rt, prop, ref) => rt.js.JSValue.unanchored(ref.get()?.[prop])"
+
+internal.runtime.replacements.warp_js.JSValue_setProperty : Replacement
+internal.runtime.replacements.warp_js.JSValue_setProperty =
+  jsUnboxed [VText, VForeign, VForeign] None "(rt, prop, val, ref) => { let obj = ref.get(); if (obj != null) obj[prop] = val.get(); }"
+
+internal.runtime.replacements.warp_js.JSValue_setPropertyText : Replacement
+internal.runtime.replacements.warp_js.JSValue_setPropertyText =
+  jsUnboxed [VText, VText, VForeign] None "(rt, prop, text, ref) => { let obj = ref.get(); if (obj != null) obj[prop] = text; }"
+
+internal.runtime.replacements.warp_js.JSValue_invoke0 : Replacement
+internal.runtime.replacements.warp_js.JSValue_invoke0 =
+  jsUnboxed [VText, VForeign] (Some VForeign) "(rt, method, ref) => rt.js.JSValue.unanchored(ref.get()[method]())"
+
+internal.runtime.replacements.warp_js.JSValue_invoke0_ : Replacement
+internal.runtime.replacements.warp_js.JSValue_invoke0_ =
+  jsUnboxed [VText, VForeign] None "(rt, method, ref) => { ref.get()[method](); }"
+
+internal.runtime.replacements.warp_js.JSValue_invoke1_ : Replacement
+internal.runtime.replacements.warp_js.JSValue_invoke1_ =
+  jsUnboxed [VText, VForeign, VForeign] None "(rt, method, arg0, ref) => { ref.get()[method](arg0.get()); }"
+
+internal.runtime.replacements.warp_js.JSValue_invokeText1 : Replacement
+internal.runtime.replacements.warp_js.JSValue_invokeText1 =
+  jsUnboxed [VText, VText, VForeign] (Some VForeign) "(rt, method, str0, ref) => rt.js.JSValue.unanchored(ref.get()[method](str0))"
+
+internal.runtime.replacements.warp_js.JSValue_invokeText1_ : Replacement
+internal.runtime.replacements.warp_js.JSValue_invokeText1_ =
+  jsUnboxed [VText, VText, VForeign] None "(rt, method, str0, ref) => { ref.get()[method](str0); }"
+
+internal.runtime.replacements.warp_js.JSValue_invokeText2 : Replacement
+internal.runtime.replacements.warp_js.JSValue_invokeText2 =
+  jsUnboxed [VText, VText, VText, VForeign] (Some VForeign) "(rt, method, str0, str1, ref) => rt.js.JSValue.unanchored(ref.get()[method](str0, str1))"
+
+internal.runtime.replacements.warp_js.JSValue_invokeText2_ : Replacement
+internal.runtime.replacements.warp_js.JSValue_invokeText2_ =
+  jsUnboxed [VText, VText, VText, VForeign] None "(rt, method, str0, str1, ref) => { ref.get()[method](str0, str1); }"
+
+internal.runtime.replacements.warp_js.JSValue_invokeText3_ : Replacement
+internal.runtime.replacements.warp_js.JSValue_invokeText3_ =
+  jsUnboxed [VText, VText, VText, VText, VForeign] None "(rt, method, str0, str1, str2, ref) => { ref.get()[method](str0, str1, str2); }"
+
+internal.runtime.replacements.warp_js.JSValue_invokeTextVal_ : Replacement
+internal.runtime.replacements.warp_js.JSValue_invokeTextVal_ =
+  jsUnboxed [VText, VText, VForeign, VForeign] None "(rt, method, str0, val, ref) => { ref.get()[method](str0, val.get()); }"
+
+internal.runtime.replacements.warp_js.JSValue_callback1_ : Replacement
+internal.runtime.replacements.warp_js.JSValue_callback1_ =
+  jsUnboxed [VFunc] (Some VForeign) "(rt, func) => rt.js.JSValue.unanchored((arg0) => { rt.callDirect(rt.Args_of(rt.Foreign(rt.js.JSValue.unanchored(arg0)), 1), func); })"
+
+{{
+`sharedValues runtime type values` defines an immutable global holding an array of boxed `type` values, one for each wasm constant in `values` (an `i32` for {VBoolean}, an `i64` for {VNat} and {VInt}). A builtin whose result is one of a few values can index this array instead of allocating a new box on every call. Unison values are immutable and compared by value, so sharing a box changes nothing a program can see.
+}}
+internal.Replacement.sharedValues : Runtime -> ValueType -> [Int] ->{TypeCtx, ModuleCtx} GlobalReference
+internal.Replacement.sharedValues runtime ty values =
+  pushValue value =
+    pushTag ty
+    match ty with
+      VBoolean -> i32.const (Int.truncate0 value)
+      _        -> i64.const (Int.toRepresentation value)
+    struct.new (Runtime.valueType ty runtime)
+  def.global (global.const (Runtime.internalRef Values runtime)) do
+    List.foreach pushValue values
+    newFixed (Runtime.internalType Values runtime) (List.size values)
+
+{{
+A builtin computed by `body` from its unboxed arguments, as wasm instructions inlined into a direct function.
+
+The arguments are pushed unboxed, by their {type ValueType}s, and `body` leaves the result unboxed. A {VBoolean} result, a `0` or `1`, picks one of two shared boxes ({sharedValues}). Every other result is boxed into a new struct. Comparisons are most of the intrinsics, and a UI calls them constantly, so a Boolean result no longer allocates.
+}}
+internal.Replacement.intrinsic : [ValueType] -> ValueType -> '{TypeCtx, FuncCtx, ExprCtx} () -> Replacement
+internal.Replacement.intrinsic paramTypes resultType body =
+  arity = List.size paramTypes
+  pushParams env vars = List.foldLeft (cases env, (ty, var) -> pushUnboxedVar ty env var) env (List.zip paramTypes vars)
+  inliner : Runtime ->{TypeCtx, Exception, ModuleCtx} SegmentEnv -> [Var] ->{TypeCtx, FuncCtx, ExprCtx} SegmentEnv
+  inliner runtime = match resultType with
+    VBoolean ->
+      booleans = sharedValues runtime VBoolean [+0, +1]
+      shared env vars =
+        global.get booleans
+        env' = pushParams env vars
+        body()
+        i32.const 0
+        i32.ne()
+        array.get (Runtime.internalType Values runtime)
+        env'
+      shared
+    _        ->
+      boxed env vars =
+        pushTag resultType
+        env' = pushParams env vars
+        body()
+        struct.new (Runtime.valueType resultType runtime)
+        env'
+      boxed
+  wasmExpression arity inliner
+
+{{
+`Universal.compare` for warp's output: the common cases are compared in wasm by {Universal_compare.defineCompareValues}, and anything else goes to the JS implementation it replaced ({Universal_compare.jsSource}). The result is one of three shared `Int` boxes ({sharedValues}), so a comparison allocates nothing: the `Map`s and `Trie`s a UI library keys its state on compare constantly.
+}}
+internal.runtime.replacements.unison_base.Universal_compare : Replacement
+internal.runtime.replacements.unison_base.Universal_compare =
+  builder name runtime =
+    use Text ++
+    externRef = abs.ref extern
+    anyValueRef = Runtime.internalRef InternalType.Value runtime
+    rt = import.global "runtime" "self" (global.const externRef)
+    jsCompare = import.func.named ("js." ++ humanReadableID name) "js" (refToWasmID name) (func.Signature.Signature [(None, externRef), (None, anyValueRef), (None, anyValueRef)] [anyValueRef] ())
+    compareValues = Universal_compare.defineCompareValues runtime rt jsCompare
+    export.func "compareValues" compareValues
+    orderings = sharedValues runtime VInt [-1, +0, +1]
+    defDirectFunc name runtime 2 do
+      global.get orderings
+      getDirectArg 0 runtime
+      getDirectArg 1 runtime
+      instr.call compareValues
+      i32.const 1
+      i32.add()
+      array.get (Runtime.internalType Values runtime)
+  NativeTerm (SigDirect 2) (Some Universal_compare.jsSource) builder
+
+{{
+`Universal.==` for warp's output, the twin of {Universal_compare}: the common cases are compared in wasm by {Universal_eq.defineEqValues}, and anything else goes to the JS implementation it replaced ({Universal_eq.jsSource}). The result is one of two shared `Boolean` boxes ({sharedValues}).
+
+UI libraries lean on this one even more than on ordering: memoisation compares each region's body closure with the previous render's, and every cell compares its definition, which walks the captured values.
+}}
+internal.runtime.replacements.unison_base.Universal_eq : Replacement
+internal.runtime.replacements.unison_base.Universal_eq =
+  builder name runtime =
+    use Text ++
+    externRef = abs.ref extern
+    anyValueRef = Runtime.internalRef InternalType.Value runtime
+    rt = import.global "runtime" "self" (global.const externRef)
+    jsEq = import.func.named ("js." ++ humanReadableID name) "js" (refToWasmID name) (func.Signature.Signature [(None, externRef), (None, anyValueRef), (None, anyValueRef)] [anyValueRef] ())
+    eqValues = Universal_eq.defineEqValues runtime rt jsEq
+    export.func "eqValues" eqValues
+    booleans = sharedValues runtime VBoolean [+0, +1]
+    defDirectFunc name runtime 2 do
+      global.get booleans
+      getDirectArg 0 runtime
+      getDirectArg 1 runtime
+      instr.call eqValues
+      array.get (Runtime.internalType Values runtime)
+  NativeTerm (SigDirect 2) (Some Universal_eq.jsSource) builder
+
+{{
+The wasm half of {Universal_eq}: `eqValues a b` is `1` when the two values are equal and `0` otherwise, `eqArgs` compares two argument arrays (same length, every pair equal), and `eqSeqs` two lists. They are mutually recursive.
+
+Two values of different tags are unequal unless both are numbers (`Nat` against `Int`) or both are functions. A plain function against a closure is compared here by id, and is unequal when the ids differ. ink's skip check makes that comparison for every region it re-runs, and it used to cost a call into JS and eight calls back. Every case not handled here goes to the JS function `jsEq` and keeps its JS meaning: a number against a number of the other kind, and a function against a closure with the same id.
+}}
+internal.runtime.replacements.unison_base.Universal_eq.defineEqValues :
+  Runtime
+  -> GlobalReference
+  -> FuncReference
+  ->{TypeCtx, ModuleCtx} FuncReference
+internal.runtime.replacements.unison_base.Universal_eq.defineEqValues
+  runtime rt jsEq =
+  use InternalType Value
+  use Runtime internalRef internalType valueRef valueType
+  use declare func.named
+  use func *
+  use i32 add and const eqz geU ne or
+  use instr call loop
+  use local set
+  use ref cast
+  anyValueRef = internalRef Value runtime
+  anyValueType = internalType Value runtime
+  valuesType = internalType Values runtime
+  valuesRef = internalRef Values runtime
+  listType = valueType VList runtime
+  listRef = valueRef VList runtime
+  compareIds = helper CompareIds runtime
+  seqAt = emitSeqAt listType valuesType anyValueType
+  stringsEqual =
+    import.func
+      "wasm:js-string"
+      "equals"
+      (param externref * param externref => result i32)
+  (eqValues, defEqValues) =
+    func.named
+      "eqValues"
+      (param.named "lhs" anyValueRef
+        * param.named "rhs" anyValueRef
+        => result i32)
+  (eqArgs, defEqArgs) =
+    func.named
+      "eqArgs"
+      (param.named "lhsArgs" valuesRef
+        * param.named "rhsArgs" valuesRef
+        => result i32)
+  (eqSeqs, defEqSeqs) =
+    func.named
+      "eqSeqs"
+      (param.named "lhsSeq" listRef
+        * param.named "rhsSeq" listRef
+        => result i32)
+  use local named
+  returnIfFalse = do
+    eqz()
+    ifThen do
+      const 0
+      return()
+  isIntOrNat tagLocal = do
+    use i32 eq
+    use local get
+    get tagLocal
+    pushTag VNat
+    eq()
+    get tagLocal
+    pushTag VInt
+    eq()
+    or()
+  isFnOrClosure tagLocal = do
+    use i32 eq
+    use local get
+    get tagLocal
+    pushTag VFunc
+    eq()
+    get tagLocal
+    pushTag VClosure
+    eq()
+    or()
+  defEqValues cases
+    (lhs, rhs) ->
+      tagA = named "tagA" i32
+      tagB = named "tagB" i32
+      field vt index side = do
+        local.get side
+        cast (valueRef vt runtime)
+        struct.get (valueType vt runtime) index
+      whenTag vt body =
+        local.get tagA
+        pushTag vt
+        i32.eq()
+        ifThen do
+          body()
+          return()
+      local.get lhs
+      local.get rhs
+      ref.eq()
+      ifThen do
+        const 1
+        return()
+      local.get lhs
+      struct.get anyValueType 0
+      tee tagA
+      local.get rhs
+      struct.get anyValueType 0
+      tee tagB
+      i32.eq()
+      ifThen do
+        use local get
+        whenTag VNat do
+          field VNat 1 lhs ()
+          field VNat 1 rhs ()
+          i64.eq()
+        whenTag VInt do
+          field VInt 1 lhs ()
+          field VInt 1 rhs ()
+          i64.eq()
+        whenTag VFloat do
+          field VFloat 1 lhs ()
+          field VFloat 1 rhs ()
+          f64.eq()
+        whenTag VBoolean do
+          field VBoolean 1 lhs ()
+          field VBoolean 1 rhs ()
+          i32.eq()
+        whenTag VText do
+          field VText 1 lhs ()
+          field VText 1 rhs ()
+          call stringsEqual
+        whenTag VChar do
+          field VChar 1 lhs ()
+          field VChar 1 rhs ()
+          call stringsEqual
+        whenTag VTypeLink do
+          field VTypeLink 1 lhs ()
+          field VTypeLink 1 rhs ()
+          call compareIds
+          eqz()
+        whenTag VTermLink do
+          field VTermLink 1 lhs ()
+          field VTermLink 1 rhs ()
+          call compareIds
+          eqz()
+          returnIfFalse()
+          field VTermLink 2 lhs ()
+          field VTermLink 2 rhs ()
+          i32.eq()
+        whenTag VData do
+          field VData 2 lhs ()
+          field VData 2 rhs ()
+          i32.eq()
+          returnIfFalse()
+          field VData 1 lhs ()
+          field VData 1 rhs ()
+          call compareIds
+          eqz()
+          returnIfFalse()
+          field VData 3 lhs ()
+          field VData 3 rhs ()
+          call eqArgs
+        whenTag VList do
+          get lhs
+          cast listRef
+          get rhs
+          cast listRef
+          call eqSeqs
+        whenTag VArray do
+          field VArray 2 lhs ()
+          field VArray 2 rhs ()
+          call eqArgs
+        whenTag VFunc do
+          field VFunc 1 lhs ()
+          field VFunc 1 rhs ()
+          call compareIds
+          eqz()
+        whenTag VClosure do
+          field VClosure 1 lhs ()
+          field VClosure 1 rhs ()
+          call compareIds
+          eqz()
+          returnIfFalse()
+          field VClosure 4 lhs ()
+          field VClosure 4 rhs ()
+          call eqArgs
+      local.get tagA
+      local.get tagB
+      ne()
+      ifThen do
+        isIntOrNat tagA ()
+        isIntOrNat tagB ()
+        and()
+        isFnOrClosure tagA ()
+        isFnOrClosure tagB ()
+        and()
+        or()
+        eqz()
+        ifThen do
+          const 0
+          return()
+        isFnOrClosure tagA ()
+        isFnOrClosure tagB ()
+        and()
+        ifThen do
+          field VFunc 1 lhs ()
+          field VFunc 1 rhs ()
+          call compareIds
+          eqz()
+          returnIfFalse()
+      global.get rt
+      local.get lhs
+      local.get rhs
+      call jsEq
+      cast (valueRef VBoolean runtime)
+      struct.get (valueType VBoolean runtime) 1
+  defEqArgs cases
+    (lhsArgs, rhsArgs) ->
+      index = named "index" i32
+      size = named "size" i32
+      local.get lhsArgs
+      len()
+      tee size
+      local.get rhsArgs
+      len()
+      ne()
+      ifThen do
+        const 0
+        return()
+      const 0
+      set index
+      loop cases
+        continue ->
+          local.get index
+          local.get size
+          geU()
+          ifThen do
+            const 1
+            return()
+          local.get lhsArgs
+          local.get index
+          array.get valuesType
+          local.get rhsArgs
+          local.get index
+          array.get valuesType
+          call eqValues
+          returnIfFalse()
+          local.get index
+          const 1
+          add()
+          set index
+          br continue
+      unreachable()
+  defEqSeqs cases
+    (lhsSeq, rhsSeq) ->
+      size = named "size" i32
+      index = named "index" i32
+      lhsVals = named "lhsVals" valuesRef
+      rhsVals = named "rhsVals" valuesRef
+      lhsOff = named "lhsOff" i32
+      rhsOff = named "rhsOff" i32
+      local.get lhsSeq
+      local.get rhsSeq
+      ref.eq()
+      ifThen do
+        const 1
+        return()
+      local.get lhsSeq
+      struct.get listType 1
+      tee size
+      local.get rhsSeq
+      struct.get listType 1
+      ne()
+      ifThen do
+        const 0
+        return()
+      local.get size
+      eqz()
+      ifThen do
+        const 1
+        return()
+      local.get lhsSeq
+      struct.get listType 2
+      local.get rhsSeq
+      struct.get listType 2
+      or()
+      eqz()
+      ifThen do
+        local.get lhsSeq
+        struct.get listType 4
+        set lhsVals
+        local.get lhsSeq
+        struct.get listType 3
+        set lhsOff
+        local.get rhsSeq
+        struct.get listType 4
+        set rhsVals
+        local.get rhsSeq
+        struct.get listType 3
+        set rhsOff
+        const 0
+        set index
+        loop cases
+          continue ->
+            local.get index
+            local.get size
+            geU()
+            ifThen do
+              const 1
+              return()
+            local.get lhsVals
+            local.get lhsOff
+            local.get index
+            add()
+            array.get valuesType
+            local.get rhsVals
+            local.get rhsOff
+            local.get index
+            add()
+            array.get valuesType
+            call eqValues
+            returnIfFalse()
+            local.get index
+            const 1
+            add()
+            set index
+            br continue
+        unreachable()
+      const 0
+      set index
+      loop cases
+        continue ->
+          use local get
+          get index
+          get size
+          geU()
+          ifThen do
+            const 1
+            return()
+          get lhsSeq
+          get index
+          call seqAt
+          get rhsSeq
+          get index
+          call seqAt
+          call eqValues
+          returnIfFalse()
+          get index
+          const 1
+          add()
+          set index
+          br continue
+      unreachable()
+  eqValues
+
+
+---
+
+{{
+The wasm half of {Universal_eq}: `eqValues a b` is `1` when the two values are equal and `0` otherwise, and `eqArgs` compares two argument arrays (same length, every pair equal). The two are mutually recursive.
+
+Two values of different tags are compared here when both are functions: a plain function against a closure is unequal unless they share an id. ink's skip check makes that comparison for every region it re-runs, and it used to cost a call into JS and eight calls back. Every other case not handled here, including `Nat` against `Int` and a function against a closure with the same id, goes to the JS function `jsEq` and keeps its JS meaning.
+}}
+internal.runtime.replacements.unison_base.Universal_eq.defineEqValues : Runtime -> GlobalReference -> FuncReference ->{TypeCtx, ModuleCtx} FuncReference
+internal.runtime.replacements.unison_base.Universal_eq.defineEqValues runtime rt jsEq =
+  use func *
+  use local get named set
+  anyValueRef = Runtime.internalRef Value runtime
+  valueType = Runtime.internalType Value runtime
+  valuesType = Runtime.internalType Values runtime
+  valuesRef = Runtime.internalRef Values runtime
+  compareIds = Runtime.helper CompareIds runtime
+  stringsEqual = import.func "wasm:js-string" "equals" (param externref * param externref => result i32)
+  (eqValues, defEqValues) = declare.func.named "eqValues" (param.named "a" anyValueRef * param.named "b" anyValueRef => result i32)
+  (eqArgs, defEqArgs) = declare.func.named "eqArgs" (param.named "as" valuesRef * param.named "bs" valuesRef => result i32)
+  returnIfFalse = do
+    i32.eqz()
+    ifThen do
+      i32.const 0
+      return()
+  defEqValues cases
+    (a, b) ->
+      tag = named "tag" i32
+      otherTag = named "otherTag" i32
+      field vt index side = do
+        get side
+        ref.cast (Runtime.valueRef vt runtime)
+        struct.get (Runtime.valueType vt runtime) index
+      whenTag vt body =
+        get tag
+        pushTag vt
+        i32.eq()
+        ifThen do
+          body()
+          return()
+      isFunctionTag tagLocal =
+        get tagLocal
+        pushTag VFunc
+        i32.eq()
+        get tagLocal
+        pushTag VClosure
+        i32.eq()
+        i32.or()
+      get a
+      get b
+      ref.eq()
+      ifThen do
+        i32.const 1
+        return()
+      get a
+      struct.get valueType 0
+      local.tee tag
+      get b
+      struct.get valueType 0
+      local.tee otherTag
+      i32.eq()
+      ifThen do
+        whenTag VNat do
+          field VNat 1 a ()
+          field VNat 1 b ()
+          i64.eq()
+        whenTag VInt do
+          field VInt 1 a ()
+          field VInt 1 b ()
+          i64.eq()
+        whenTag VFloat do
+          field VFloat 1 a ()
+          field VFloat 1 b ()
+          f64.eq()
+        whenTag VBoolean do
+          field VBoolean 1 a ()
+          field VBoolean 1 b ()
+          i32.eq()
+        whenTag VText do
+          field VText 1 a ()
+          field VText 1 b ()
+          instr.call stringsEqual
+        whenTag VChar do
+          field VChar 1 a ()
+          field VChar 1 b ()
+          instr.call stringsEqual
+        whenTag VTypeLink do
+          field VTypeLink 1 a ()
+          field VTypeLink 1 b ()
+          instr.call compareIds
+          i32.eqz()
+        whenTag VTermLink do
+          field VTermLink 1 a ()
+          field VTermLink 1 b ()
+          instr.call compareIds
+          i32.eqz()
+          returnIfFalse()
+          field VTermLink 2 a ()
+          field VTermLink 2 b ()
+          i32.eq()
+        whenTag VData do
+          field VData 2 a ()
+          field VData 2 b ()
+          i32.eq()
+          returnIfFalse()
+          field VData 1 a ()
+          field VData 1 b ()
+          instr.call compareIds
+          i32.eqz()
+          returnIfFalse()
+          field VData 3 a ()
+          field VData 3 b ()
+          instr.call eqArgs
+        whenTag VFunc do
+          field VFunc 1 a ()
+          field VFunc 1 b ()
+          instr.call compareIds
+          i32.eqz()
+        whenTag VClosure do
+          field VClosure 1 a ()
+          field VClosure 1 b ()
+          instr.call compareIds
+          i32.eqz()
+          returnIfFalse()
+          field VClosure 4 a ()
+          field VClosure 4 b ()
+          instr.call eqArgs
+      isFunctionTag tag
+      isFunctionTag otherTag
+      i32.and()
+      ifThen do
+        field VFunc 1 a ()
+        field VFunc 1 b ()
+        instr.call compareIds
+        i32.eqz()
+        returnIfFalse()
+      global.get rt
+      get a
+      get b
+      instr.call jsEq
+      ref.cast (Runtime.valueRef VBoolean runtime)
+      struct.get (Runtime.valueType VBoolean runtime) 1
+  defEqArgs cases
+    (as, bs) ->
+      index = named "index" i32
+      size = named "size" i32
+      get as
+      array.len()
+      local.tee size
+      get bs
+      array.len()
+      i32.ne()
+      ifThen do
+        i32.const 0
+        return()
+      i32.const 0
+      set index
+      instr.loop cases
+        continue ->
+          get index
+          get size
+          i32.geU()
+          ifThen do
+            i32.const 1
+            return()
+          get as
+          get index
+          array.get valuesType
+          get bs
+          get index
+          array.get valuesType
+          instr.call eqValues
+          returnIfFalse()
+          get index
+          i32.const 1
+          i32.add()
+          set index
+          br continue
+      unreachable()
+  eqValues

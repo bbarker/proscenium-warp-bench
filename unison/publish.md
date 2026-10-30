@@ -16,6 +16,7 @@ Each line is `push <remote> <local>`. A branch that is already pushed and unchan
 @dfreeman/proscenium/bench> push @nusentry/warp/perf @dfreeman/warp/perf
 @dfreeman/proscenium/bench> push @nusentry/warp/perf-r4 @dfreeman/warp/perf-r4
 @dfreeman/proscenium/bench> push @nusentry/warp/perf-r5 @dfreeman/warp/perf-r5
+@dfreeman/proscenium/bench> push @nusentry/warp/perf-r7 @dfreeman/warp/perf-r7
 @dfreeman/proscenium/bench> push @nusentry/proscenium/bench @dfreeman/proscenium/bench
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf @dfreeman/proscenium/perf
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-compare @dfreeman/proscenium/perf-compare
@@ -30,4 +31,5 @@ Each line is `push <remote> <local>`. A branch that is already pushed and unchan
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r5k @dfreeman/proscenium/perf-r5k
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r6 @dfreeman/proscenium/perf-r6
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r5m @dfreeman/proscenium/perf-r5m
+@dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r7 @dfreeman/proscenium/perf-r7
 ```

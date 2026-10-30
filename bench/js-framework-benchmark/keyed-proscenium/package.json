@@ -1,0 +1,15 @@
+{
+  "name": "js-framework-benchmark-keyed-proscenium",
+  "version": "1.0.0",
+  "description": "Benchmark for Proscenium, a Unison UI library compiled to WebAssembly by warp",
+  "license": "ISC",
+  "js-framework-benchmark": {
+    "frameworkVersion": "0.4.3-perf-r7",
+    "frameworkHomeURL": "https://share.unison-lang.org/@dfreeman/proscenium",
+    "language": "Unison"
+  },
+  "scripts": {
+    "build-prod": "echo This is a no-op: bundled-dist is prebuilt, because building it needs UCM and binaryen. See README.md.",
+    "build-prod-force": "nu ../../../../../bench/js-framework-benchmark/install.nu"
+  }
+}
