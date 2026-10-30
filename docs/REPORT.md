@@ -1532,16 +1532,84 @@ What it shows:
   against 22–24 ms, in both interleaved runs, though round 7 allocates and crosses less
   for it (1.34 million allocations against 1.47 million, 43 crossings against 229).
   Timed alone, or after the same sequence of operations, it is the same in both:
-  22.6 ms against 22.4, and 23.8 against 25.0, with or without a forced garbage
-  collection first. The likeliest cause is a collection now landing inside the timed
-  window of the suite's clear, since allocation before it changed. That is to be
-  confirmed with a trace. "Update every 10th" has a wide spread (5–11 ms) and moved
-  within it.
+  22.6 ms against 22.4, and 23.8 against 25.0. The cause is a garbage collection owed by
+  the earlier operations, which now falls inside the clear. With a full collection forced
+  before every operation (`BENCH_GC=1`, `results/round7-gc-rows.json`), the clear takes
+  31.5 ms in round 5 and 31.3 in round 7. That run was at load 13–28, hence the higher
+  numbers. "Update every 10th" has a wide spread (5–11 ms) and moved within it.
 - **What is left is allocation and dispatch,** as "Measured attribution" said: 4,356
   allocations and 41 ability operations per row. Most of those come from how ink and
   Proscenium's code is compiled (argument arrays, data, continuations, closures). That
   is the work of "A tree of Proscenium's own" (`docs/ProsceniumTree.md`) and of warp's
   continuation handling, below.
+
+#### In js-framework-benchmark
+
+The author pointed to
+[js-framework-benchmark](https://krausest.github.io/js-framework-benchmark/current.html) as
+the suite people compare frameworks on.
+
+- **The entry:** `bench/js-framework-benchmark/` holds a `frameworks/keyed/proscenium`
+  entry for it. The app is `bench.jfb` on Proscenium `perf-r7`: the fine-grained rows
+  app with the reference markup. The bundle is prebuilt, as the Rust entries' are.
+- **Checks:** it passes the suite's keyed check and its smoke test. Like every wasm
+  entry, it fails the suite's Content Security Policy (which leaves out
+  `wasm-unsafe-eval`), and is flagged with issue 1139, as Leptos is.
+- **The run:** the suite at commit `ca8715d` (2026-10-25), locally, in the devShell's
+  headless Chromium 149, 10 iterations instead of the suite's 15. The machine's load was
+  between 6 and 27, but the suite runs each benchmark across all frameworks in turn, so
+  load drift reaches them alike.
+- **Leptos's entry** is the suite's own, Leptos 0.7.0. The raw results are in
+  `bench/js-framework-benchmark/results/round7/`.
+
+The suite's time runs from the click to the end of the frame that paints the result. It
+slows the CPU 16 times for partial update and 8 times for clear, so those are not
+comparable with this report's other tables:
+
+| Benchmark (median) | Proscenium r7 | Leptos 0.7.0 | vanillajs |
+| --- | --- | --- | --- |
+| create 1,000 rows (ms) | 145.4 | 69.4 | 64.0 |
+| replace all 1,000 rows | 177.1 | 78.7 | 70.2 |
+| partial update, ×16 slowdown | 86.6 | 29.3 | 32.4 |
+| select a row | **8.6** | 18.0 | 10.8 |
+| swap two rows | 130.2 | 82.1 | 53.4 |
+| remove a row | 93.8 | 61.8 | 48.3 |
+| create 10,000 rows | 1,445.8 | 1,077.1 | 770.1 |
+| append 1,000 to 1,000 | 255.6 | 121.9 | 107.5 |
+| clear 1,000 rows, ×8 slowdown | 97.8 | 69.5 | 33.6 |
+| first paint (ms) | **352.8** | 364.7 | 173.4 |
+| memory when ready (MB) | **0.85** | 1.79 | 0.58 |
+| memory with 1,000 rows (MB) | 15.3 | 5.4 | 1.9 |
+| memory after creating and clearing, ×5 (MB) | **1.59** | 4.58 | 0.66 |
+| size, uncompressed (KB) | 191.9 | 189.6 | 11.3 |
+| size, compressed (KB) | 54.3 | 48.8 | 2.5 |
+
+On the suite's own measure, round 7 is 1.3–3 times Leptos where lists change, and faster
+where little does:
+- **Selection is faster:** 8.6 ms against 18.0. `Selector` tells only the two rows whose
+  state changed.
+- **Startup is faster,** and lighter: first paint 353 ms against 365, and half the
+  memory when ready.
+- **Memory with 1,000 rows** is 2.8 times Leptos's. That is the allocation the counts
+  above show, live while the rows are.
+- **The shipped code** is about the same size.
+
+**Against this report's harness.**
+- **The totals are closer than ours:** paint takes about the same time in both
+  frameworks (56–70 ms for 1,000 rows), and the suite counts it.
+- **The script share is further apart:**
+  - create 1,000: 79 against 13 ms;
+  - swap: 53 against 3;
+  - remove: 27 against 2.
+
+  That is 6–17 times Leptos, against 3–7 times in our harness.
+- **The likely reason is warm-up:** the suite repeats each operation several times
+  before the measured run. With warp's allocation rate, a garbage collection owed by
+  those repetitions falls inside the measured one. That is the effect found in our
+  "clear 2,000" above, here on every benchmark.
+
+The suite measures what a user would see. Our harness, with `BENCH_GC=1` when needed,
+measures what each operation costs by itself, and its counters say why. Both stay.
 
 #### Four ways to write a builtin
 

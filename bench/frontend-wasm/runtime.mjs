@@ -78,6 +78,10 @@ const COUNTING = process.env.BENCH_COUNT === "1";
 // BENCH_INTERLEAVE=1 runs one iteration of each implementation in turn instead
 // of all of one implementation's iterations together.
 const INTERLEAVED = process.env.BENCH_INTERLEAVE === "1";
+// BENCH_GC=1 forces a full garbage collection before each operation (Chromium is
+// started with --expose-gc), so a collection owed by earlier operations is not
+// paid inside a later one's time.
+const FORCE_GC = process.env.BENCH_GC === "1";
 
 // Installed before the page's script when counting. An import is labelled by
 // its name when the name is readable (`##Nat.toText`), and otherwise (warp's
@@ -310,6 +314,7 @@ async function runImplementation(browser, base, name, path, operations, iteratio
     await takeCounts("load (ready)", tab);
     await tab.evaluate(HELPERS);
     for (const [operation, body] of operations) {
+      if (FORCE_GC) await tab.evaluate(() => window.gc?.());
       const result = await tab.evaluate(`(async () => { ${body} })()`);
       await takeCounts(operation, tab);
       if (operation.startsWith("memory")) {
@@ -354,7 +359,7 @@ async function main() {
   const pages = new Map(Object.entries(available).map(([name, impl]) => [`/${name}.html`, page(impl.script)]));
   const server = await serve(pages);
   const base = `http://127.0.0.1:${server.address().port}`;
-  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN, headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN, headless: true, args: FORCE_GC ? ["--js-flags=--expose-gc"] : [] });
   const results = {};
   const version = browser.version();
   try {
@@ -378,7 +383,7 @@ async function main() {
     server.close();
   }
   const line = { suite, iterations, at: new Date().toISOString(), load: loadavg().map(round), cpus: cpus().length,
-    chromium: version, interleaved: INTERLEAVED, loadAtStart, results };
+    chromium: version, interleaved: INTERLEAVED, forcedGC: FORCE_GC, loadAtStart, results };
   if (COUNTING) {
     await writeFile(join(here, "results", `boundary-${suite}.json`), JSON.stringify({ ...line, kind: "boundary counts" }, null, 1) + "\n");
   } else {

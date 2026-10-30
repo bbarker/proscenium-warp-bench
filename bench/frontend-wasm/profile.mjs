@@ -5,7 +5,7 @@
 //
 // <dir> is a build under target/frontend-bench/ (e.g. warp/rows-debug, whose
 // module carries debug names). <operation> is one of: select, swap, replace,
-// update, create. The page first creates 1,000 rows, then the profiler runs
+// update, create, create1k, clear2k (after appending 1,000 more). The page first creates 1,000 rows, then the profiler runs
 // around the one operation only.
 
 import { createRequire } from "node:module";
@@ -27,6 +27,7 @@ const OPERATIONS = {
   update: ["document.querySelector('#update')", "document.querySelectorAll('#tbody > tr')[0].cells[1].textContent.endsWith('!!!')"],
   create: ["document.querySelector('#runlots')", "document.querySelectorAll('#tbody > tr').length === 10000"],
   create1k: ["document.querySelector('#run')", "document.querySelectorAll('#tbody > tr').length === 1000"],
+  clear2k: ["document.querySelector('#clear')", "document.querySelectorAll('#tbody > tr').length === 0"],
 };
 
 async function main() {
@@ -68,6 +69,10 @@ async function main() {
     const before0 = id(0);
     window.__swapDone = () => id(1) === before998;
     window.__replaced = () => document.querySelectorAll("#tbody > tr").length === 1000 && id(0) !== before0;
+  });
+  if (operation === "clear2k") await tab.evaluate(async () => {
+    document.querySelector("#add").click();
+    while (document.querySelectorAll("#tbody > tr").length !== 2000) await new Promise((done) => setTimeout(done, 10));
   });
   const client = await tab.context().newCDPSession(tab);
   await client.send("Profiler.enable");

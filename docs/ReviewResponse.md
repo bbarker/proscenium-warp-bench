@@ -82,7 +82,35 @@ could happen is a `Session`, which holds its continuation as a value.
 - **Checks:** both pass the suite's keyed check. Like Leptos, the entries are flagged with
   issue 1139 for the suite's CSP.
 
-The results of a local run are in the report.
+A local run (10 iterations, Chromium 149) puts round 7 against Leptos 0.7.0's entry at:
+
+- **Lists:** 1.3–2.3 times Leptos on the suite's totals, which include paint.
+- **Select:** 8.6 against 18.0 ms, faster than Leptos.
+- **First paint:** 353 against 365 ms.
+- **Memory:** 0.85 against 1.79 MB when ready, and 15.3 against 5.4 MB with 1,000 rows.
+- **Size:** 54 against 49 KB compressed.
+
+The report's "In js-framework-benchmark" section has the full table and how it relates to
+the harness's numbers.
+
+## Writing builtins: four ways, timed
+
+Your reason for leaving builtins in JS was the work of writing them by hand. `Nat.toText`
+was written four ways and timed on a million calls:
+
+| Version | Time |
+| --- | --- |
+| unboxed JS (`jsUnboxed`) | 40 ms |
+| the old JS glue | 80 ms |
+| your DSL, one `fromCharCode` per digit and `concat` | 196 ms |
+| plain Unison, aliased in with `termAlias` | 338 ms |
+
+- **Unison** is the easiest to write and to test, but slow until warp keeps local
+  arithmetic unboxed.
+- **The DSL** would need an `i16` array and `fromCharCodeArray` to compete.
+
+So for builtins whose work is a JS primitive, unboxed JS is the fast path today. Pure wasm
+paid off for `compare`, `==` and `List`.
 
 ## The branches
 
