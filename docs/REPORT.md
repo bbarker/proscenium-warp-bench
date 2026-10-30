@@ -149,12 +149,16 @@ repeat it.
     7.3 ms in plain JS, or 3.6 ms cloning a template as Leptos does. A CPU profile of
     creating 1,000 rows puts the rest of the work in four places:
     - garbage collection: about 20 ms
-    - warp's continuation dispatch (`callDirect`, `apply*`): 15–20 ms
+    - `callDirect` and `apply*`: 15–20 ms. `callDirect` is how JS calls into Unison, and
+      `apply*` applies a closure whose code is not known statically. Ordinary calls to
+      a known function that needs no abilities are already direct (corrected
+      2026-10-30, after the author's review).
     - crossings between wasm and JS: about 10 ms
     - the DOM calls themselves: about 8 ms
 
     No library function is more than a few milliseconds. Batching DOM calls could save
-    at most the crossings. Allocation and dispatch are warp's to fix.
+    at most the crossings. "Measured attribution" below says what the allocation and the
+    calls actually are.
 - **On a page modelled on a real app, the gap mostly closes.** The new meals page
   imitates a production app's Meals page: a week of day cards, a grocery list, a recipe
   search, a FLIP animation and an SVG mascot.
@@ -431,6 +435,19 @@ After round 1, Proscenium stayed far behind Leptos:
 
 wasm-opt makes no measurable difference to warp's runtime: the unoptimised module ran
 within a few percent of the optimised one. So the time is not in code generation.
+
+That holds even though the build already runs wasm-opt in closed-world mode
+(`--closed-world -O3 --gufa --converge`). Closed-world mode can only change types that do
+not cross the module's boundary, and warp's boundary is wide:
+
+- 193 exports: a constructor and getters for every kind of value, `apply0`–`apply8`,
+  `callDirect`, `handle` and `shift`;
+- 28 JS function imports, plus `wasm:js-string`'s `compare`, `equals` and `concat`;
+- about 150 builtins implemented in the JS loader.
+
+That is from the round 5 rows build; see "Measured attribution". The author expects
+moving those builtins into wasm to let closed-world mode do much more (review,
+2026-10-30).
 
 #### Cards
 
@@ -1075,10 +1092,15 @@ allocation counters in its generated constructors.
 Two conclusions follow:
 - **Batching DOM calls has a small ceiling.** One call per batch instead of about 30 per
   row could save at most the crossings, about 10 ms of create-1,000's 90.
-- **The rest is warp's to fix.** Allocation and dispatch are properties of the compiled
-  code. They come from every value being boxed, every call going through a
-  continuation, every effect handler step capturing one, and list appends copying a
-  32-element leaf.
+- **The rest is in the compiled code.** As first written, this said allocation and
+  dispatch came from every value being boxed and every call going through a
+  continuation. The author's review (2026-10-30) corrected both:
+  - wasm-opt already unboxes values where that is easy;
+  - warp calls a statically known function that needs no abilities directly.
+
+  What remains to explain is the closures applied through `apply*`, the calls in from JS
+  through `callDirect`, and the continuations that effect handlers capture. "Measured
+  attribution" below counts each.
 
 #### What is left
 
@@ -1228,21 +1250,52 @@ What it shows:
 The swap is noisier than the rest. It moved between 4.1 and 6.0 ms across runs at
 different loads.
 
+### Review from the author, 2026-10-30
+
+The author of warp and Proscenium read the report. Paraphrased:
+
+- **Proscenium has had no performance work,** so the low-hanging fruit was expected. Given
+  the time, they would go further than these recommendations and replace ink with
+  something built for Proscenium. They have also weighed signals: more bookkeeping up
+  front in exchange for cheaper updates. They expect signals to be pleasant to use only
+  once Unison has implicits.
+- **Moving builtins from JS into wasm** has long been their plan. Everything except code
+  loading and JS interop could plausibly be wasm GC. That should be faster by itself, and
+  it should let wasm-opt do more, perhaps much more in closed-world mode.
+- **Two of the experiments listed here were unlikely to pay.** wasm-opt already unboxes
+  values where that is easy. warp already calls statically known functions that need no
+  abilities directly, without continuation dispatch.
+- **Continuation handling allocates more than it needs to,** because the implementation
+  is naive. They have been hoping that native wasm stack switching lands, so the CPS code
+  paths can go, at the cost of multi-shot continuations.
+- **The canonical benchmark** for frameworks like these is
+  [js-framework-benchmark](https://krausest.github.io/js-framework-benchmark/current.html).
+
+The report's claims about boxing and call dispatch are corrected above, and the
+experiments below are re-ranked. The plan that follows from the review is
+`/var/workspace/ProsceniumWarpReviewPlan.md` (outside this repository).
+
 ### Next experiments, by expected payoff
 
-1. **warp: less allocation.**
-   - Unboxed function arguments and primitives, which warp's own implementation notes
-     list.
-   - Find out what allocates: about 13 KB per row, all inside wasm, which Chromium's heap
-     profiler cannot attribute. An in-place `:+` (round 5) made no difference, so leaf
-     copying is not it. Boxed values, continuation frames and effect handler steps are
-     the likely candidates; counters in warp's generated constructors would say which.
+Re-ranked on 2026-10-30. Two earlier items are dropped: ahead-of-time unboxing, which
+wasm-opt already does where it is easy, and direct calls for ability-free functions,
+which warp already makes.
 
-   Garbage collection is the largest single cost left: 20 ms of create-1,000.
-2. **warp: calls without continuation dispatch.** A function that performs no abilities
-   could be called directly instead of through `callDirect`/`apply*`. That is 15–20 ms of
-   create-1,000, and most of an interaction's time.
-3. **Proscenium: fewer crossings into JS per row,** by cloning templates or by sending
+1. **Measure what allocates and what calls through `apply*`** ("Measured attribution",
+   below). Garbage collection is the largest single cost left, 20 ms of create-1,000, and
+   Chromium's heap profiler cannot see inside wasm.
+2. **warp: builtins from JS into wasm,** in the order the call counts give, then closed-world
+   mode measured again on a narrower boundary.
+3. **warp: continuation handling.**
+   - Compile a handler that resumes once, in tail position, as a direct call.
+     ink's `reconcile.handler`, which every element goes through, has that shape: it
+     resumes once and re-handles with new state.
+   - Give calls in from JS (event listeners, microtasks) a cheaper entry than
+     `callDirect`'s root continuation.
+   - Native stack switching later.
+4. **Proscenium: a tree of its own instead of ink,** the author's preferred direction,
+   behind the current API.
+5. **Proscenium: fewer crossings into JS per row,** by cloning templates or by sending
    each batch of DOM operations to one JS function. The ceiling is about 10 ms of
    create-1,000 (above).
 4. **ink: an index of children by segment** in each record, so that delivering a message

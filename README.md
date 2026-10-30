@@ -15,7 +15,10 @@ Start with [`docs/REPORT.md`](docs/REPORT.md); its executive summary has the num
 - **Runtime:** stock Proscenium was 50–300 times slower than Leptos on a
   js-framework-benchmark table. After five rounds of changes, an interaction (swap, remove, select,
   update) takes 1–6.5 ms, 5.5–7 times Leptos's work but in the same frame; building a list is
-  2.7–3.8 times Leptos's work. What is left is in warp's compiler (allocation, call dispatch).
+  2.7–3.8 times Leptos's work. What is left is mostly in warp's runtime: allocation, closures
+  applied through `apply*`, calls in from JS, and continuations captured by effect handlers.
+  Ordinary calls to known ability-free functions are already direct (the author's review,
+  2026-10-30, in the report).
 - **On a page modelled on a real app** (a meal planner's week, grocery list, search and FLIP animation),
   editing one meal is as fast as Leptos or faster, animation frames cost the same, and only creating
   many elements at once is still 2–4.5 times Leptos. Its shipped code is 62 KB against 86 KB brotli.
