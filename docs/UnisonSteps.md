@@ -387,6 +387,7 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/proscenium/perf-r7-tree> add
 @dfreeman/proscenium/perf-r7-tree> compile bench.tree.rows.build target/unison/frontend-bench/rows-build-tree2
 @dfreeman/proscenium/perf-r7-tree> compile bench.rows.build target/unison/frontend-bench/rows-build-plain
+@dfreeman/proscenium/perf-r7-tree> compile bench.tree.rowsfg.build target/unison/frontend-bench/rows-build-treefg4
 ```
 
 Suggested `history.comment` lines:

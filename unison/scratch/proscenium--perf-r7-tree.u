@@ -1,6 +1,469 @@
 {{
 A rendered view of {bench.tree.mount}, Proscenium's {type Render} API on a tree of its own with no ink. An element is a tag, its key, attributes, listeners and children. A text node holds its text. A memo stands for an element whose body may be skipped: its input is the element's name, modifiers and body closure, and it is redrawn only when that input differs.
 
+A memo's view returns the element and whether its body used a cell of its own. Only such an element is registered for drawing again on its own.
+
+A key is the node's path from the root: its parent's path, then a region's key (`Tagged 0`) where the node is inside a region, then its position among its siblings (`Untagged`). So a node inside a region keeps its key when the region moves.
+}}
+type bench.tree.TNode g
+  = TEl Text Key [(Text, Text)] [(Text, Exists (Listener g))] [bench.tree.TNode g]
+  | TTxt Key Text
+  | TMemo Key Any (() ->{g, JS} (bench.tree.TNode g, Boolean))
+
+{{ A {type bench.tree.TNode} on the page: each element with its DOM node, the listeners it calls now (in a cell, so a re-render can change them without touching the DOM), and the event names it listens for. A memo holds what it drew in a cell, so the element can be drawn again on its own when only its own state changed. }}
+type bench.tree.Mounted g
+  = OnEl JSValue Text Key [(Text, Text)] (Ref JS [(Text, Exists (Listener g))]) [Text] [bench.tree.Mounted g]
+  | OnTxt JSValue Key Text
+  | OnMemo Key Any (Ref JS (bench.tree.Mounted g))
+
+{{ A state cell: the `useCell` definition it was made from (to reset it when the definition changes), its value, and its message handler. }}
+type bench.tree.Cell g = TreeCell Any Any (Any -> Any ->{g} Any)
+
+{{
+What a render needs: the page's `document`; the cells by path; the paths whose cells changed since the last render, with all their prefixes; the render's generation; the function that runs an event's listeners and renders again; and every element drawn as a memo, by path, with the cell holding what it drew and the view that draws it.
+}}
+type bench.tree.Env g
+  = TreeEnv JSValue (Ref JS (Map Key (bench.tree.Cell g))) (Ref JS (Set Key)) (Ref JS Nat) (Ref JS (Text -> [(Text, Exists (Listener g))] -> JSValue ->{JS} ())) (Ref JS (Map Key (Ref JS (bench.tree.Mounted g), () ->{g, JS} (bench.tree.TNode g, Boolean))))
+
+bench.tree.Env.document : bench.tree.Env g -> JSValue
+bench.tree.Env.document = cases TreeEnv doc _ _ _ _ _ -> doc
+
+bench.tree.Env.cells : bench.tree.Env g -> Ref JS (Map Key (bench.tree.Cell g))
+bench.tree.Env.cells = cases TreeEnv _ cells _ _ _ _ -> cells
+
+bench.tree.Env.dirty : bench.tree.Env g -> Ref JS (Set Key)
+bench.tree.Env.dirty = cases TreeEnv _ _ dirty _ _ _ -> dirty
+
+bench.tree.Env.generation : bench.tree.Env g -> Ref JS Nat
+bench.tree.Env.generation = cases TreeEnv _ _ _ generation _ _ -> generation
+
+bench.tree.Env.fire : bench.tree.Env g -> Ref JS (Text -> [(Text, Exists (Listener g))] -> JSValue ->{JS} ())
+bench.tree.Env.fire = cases TreeEnv _ _ _ _ fire _ -> fire
+
+bench.tree.Env.memos : bench.tree.Env g -> Ref JS (Map Key (Ref JS (bench.tree.Mounted g), () ->{g, JS} (bench.tree.TNode g, Boolean)))
+bench.tree.Env.memos = cases TreeEnv _ _ _ _ _ memos -> memos
+
+{{ A key one segment longer. }}
+bench.tree.extend : Key -> Key.Segment -> Key
+bench.tree.extend key segment = match key with Key segments -> Key (segments List.:+ segment)
+
+{{ The DOM node of a rendered node. }}
+bench.tree.domOf : bench.tree.Mounted g ->{JS} JSValue
+bench.tree.domOf = cases
+  OnEl node _ _ _ _ _ _ -> node
+  OnTxt node _ _        -> node
+  OnMemo _ _ inner      -> bench.tree.domOf (Ref.read inner)
+
+bench.tree.Mounted.key : bench.tree.Mounted g -> Key
+bench.tree.Mounted.key = cases
+  OnEl _ _ key _ _ _ _ -> key
+  OnTxt _ key _        -> key
+  OnMemo key _ _       -> key
+
+bench.tree.TNode.key : bench.tree.TNode g -> Key
+bench.tree.TNode.key = cases
+  TEl _ key _ _ _ -> key
+  TTxt key _      -> key
+  TMemo key _ _   -> key
+
+{{ A modifier list as attributes and listeners. Properties and captured elements are not supported by this prototype, and are dropped. }}
+bench.tree.modifiers : [Modifier g] -> ([(Text, Text)], [(Text, Exists (Listener g))])
+bench.tree.modifiers mods =
+  use List :+
+  name = cases
+    Unqualified local -> local
+    Qualified _ local -> local
+  go acc = cases
+    [] -> acc
+    modifier +: rest ->
+      (attrs, listeners) = acc
+      match modifier with
+        Attribute attrName value -> go (attrs :+ (name attrName, value), listeners) rest
+        EventListener event listener -> go (attrs, listeners :+ (event, listener)) rest
+        Compound inner -> go (go acc inner) rest
+        _ -> go acc rest
+  go ([], []) mods
+
+{{
+Runs a {type Render} body at `scope` and returns its result, the nodes it drew in order, and how many cells it used outside the elements it drew (its own and its regions'). This is the one handler that replaces Proscenium's and ink's two: each `node` is a node here, each `fragment` a scope of keys, and each `useCell` a cell kept in the environment by path.
+
+An element becomes a memo whose input is its name, its modifiers and its body. The body is run only when that input differs from the last render's. The input also carries the render's generation when a cell under the element changed, so a changed cell is never skipped.
+}}
+bench.tree.collect : bench.tree.Env g -> Key -> '{g, Render g} r ->{g, JS} (r, [bench.tree.TNode g], Nat)
+bench.tree.collect env scope body =
+  use List :+
+  use Nat +
+  step acc position cellIndex nested = cases
+    { result } -> (result, acc, cellIndex + nested)
+    { Render.currentNamespace -> resume } ->
+      handle resume HTML with step acc position cellIndex nested
+    { Render.fragment _ maybeKey fragmentBody -> resume } ->
+      scope' = match maybeKey with
+        Some regionKey -> bench.tree.extend scope (Tagged 0 (Any regionKey))
+        None -> bench.tree.extend scope (Untagged position)
+      (result, nodes, cells) = bench.tree.collect env scope' fragmentBody
+      handle resume result with step (acc List.++ nodes) (position + 1) cellIndex (nested + cells)
+    { Render.node _ value childBody -> resume } ->
+      key = bench.tree.extend scope (Untagged position)
+      node = match value with
+        TextNode text -> TTxt key text
+        Element tag mods -> bench.tree.element env key tag mods childBody
+        _ -> TTxt key ""
+      handle resume () with step (acc :+ node) (position + 1) cellIndex nested
+    { Render.nodeWith _ nodeBody -> resume } ->
+      key = bench.tree.extend scope (Untagged position)
+      changed = Set.contains key (Ref.read (bench.tree.Env.dirty env))
+      input =
+        if changed then Any (nodeBody, Ref.read (bench.tree.Env.generation env))
+        else Any nodeBody
+      view _ =
+        (value, children, cells) = bench.tree.collect env key nodeBody
+        node = match value with
+          Element tag mods ->
+            (attrs, listeners) = bench.tree.modifiers mods
+            tagName = match tag with
+              Unqualified local -> local
+              Qualified _ local -> local
+            TEl tagName key attrs listeners children
+          TextNode text -> TTxt key text
+          _ -> TTxt key ""
+        (node, cells Nat.> 0)
+      handle resume () with step (acc :+ TMemo key input view) (position + 1) cellIndex nested
+    { Render.useCell definition -> resume } ->
+      path = bench.tree.extend scope (Tagged 1 (Any cellIndex))
+      value = bench.tree.cell env path definition
+      handle resume value with step acc position (cellIndex + 1) nested
+  handle body() with step [] 0 0 0
+
+{{ An element of {bench.tree.collect}, as a memo of its name, modifiers and body. }}
+bench.tree.element : bench.tree.Env g -> Key -> Name -> [Modifier g] -> '{g, Render g} () ->{g, JS} bench.tree.TNode g
+bench.tree.element env key tag mods childBody =
+  tagName = match tag with
+    Unqualified local -> local
+    Qualified _ local -> local
+  changed = Set.contains key (Ref.read (bench.tree.Env.dirty env))
+  input =
+    if changed then Any (tagName, mods, childBody, Ref.read (bench.tree.Env.generation env))
+    else Any (tagName, mods, childBody)
+  view _ =
+    (attrs, listeners) = bench.tree.modifiers mods
+    (_, children, cells) = bench.tree.collect env key childBody
+    (TEl tagName key attrs listeners children, cells Nat.> 0)
+  TMemo key input view
+
+{{
+The value of the cell at `path`, made from `definition` the first time, or again when the definition changed. Its message handler is what the definition registered with `onMessage`, and sending it a message is an `Update.send` addressed to `path`. `onCleanup` is accepted and not run: this prototype does not unmount cells. A cell that triggers an effect is not supported.
+}}
+bench.tree.cell : bench.tree.Env g -> Key -> ((m ->{Update} ()) ->{g, Effect g, UseCell a m g} a) ->{g, JS} a
+bench.tree.cell env path definition =
+  cells = bench.tree.Env.cells env
+  existing = Map.get path (Ref.read cells)
+  match existing with
+    Some (TreeCell made value _) | made === Any definition -> Any.unsafeExtract value
+    _ ->
+      send message = Update.send (Message path (Any message))
+      noEffects : '{g, Effect g} x ->{g} x
+      noEffects thunk = handle thunk() with cases
+        { x } -> x
+        { Effect.triggerEffect _ -> _ } -> bug "bench.tree: effects are not supported"
+        { Effect.cancelEffect _ -> _ } -> bug "bench.tree: effects are not supported"
+      register reducer = cases
+        { value } -> (value, reducer)
+        { UseCell.onMessage handler -> resume } ->
+          wrapped stateAny messageAny = Any (noEffects do handler (Any.unsafeExtract stateAny) (Any.unsafeExtract messageAny))
+          handle resume () with register wrapped
+        { UseCell.onCleanup _ -> resume } -> handle resume () with register reducer
+      (value, reducer) = noEffects do handle definition send with register (state _ -> state)
+      Ref.write cells (Map.insert path (TreeCell (Any definition) (Any value) reducer) (Ref.read cells))
+      value
+
+{{ Creates the DOM for `node`. An element listens, once per event name, through a cell holding its current listeners. }}
+bench.tree.create : bench.tree.Env g -> bench.tree.TNode g ->{g, JS} bench.tree.Mounted g
+bench.tree.create env = cases
+  TTxt key text -> OnTxt (JSValue.invokeText1 "createTextNode" text (bench.tree.Env.document env)) key text
+  TMemo key input view ->
+    (node, owns) = view()
+    drawn = JS.ref (bench.tree.create env node)
+    if owns then
+      memos = bench.tree.Env.memos env
+      Ref.write memos (Map.insert key (drawn, view) (Ref.read memos))
+    else ()
+    OnMemo key input drawn
+  TEl tag key attrs listeners children ->
+    node = JSValue.invokeText1 "createElement" tag (bench.tree.Env.document env)
+    setAttr = cases (name, value) -> JSValue.invokeText2_ "setAttribute" name value node
+    List.foreach setAttr attrs
+    current = JS.ref listeners
+    events = List.distinct (List.map at1 listeners)
+    List.foreach (event -> bench.tree.listen env node current event) events
+    mounted = List.map (bench.tree.create env) children
+    List.foreach (child -> JSValue.invoke1_ "appendChild" (bench.tree.domOf child) node) mounted
+    OnEl node tag key attrs current events mounted
+
+{{ Makes `node` call the listeners for `event` that `current` holds when the event fires. }}
+bench.tree.listen : bench.tree.Env g -> JSValue -> Ref JS [(Text, Exists (Listener g))] -> Text ->{JS} ()
+bench.tree.listen env node current event =
+  handler payload =
+    fire = Ref.read (bench.tree.Env.fire env)
+    fire event (Ref.read current) payload
+  JSValue.invokeTextVal_ "addEventListener" event (JSValue.callback1_ handler) node
+
+{{ Brings `old` in line with `new`. A memo whose input is unchanged is kept as it is, which is the skip. An element keeps its DOM node when its tag is the same: its attributes are patched, its listeners swapped in their cell, and its children reconciled. }}
+bench.tree.patch : bench.tree.Env g -> bench.tree.Mounted g -> bench.tree.TNode g ->{g, JS} bench.tree.Mounted g
+bench.tree.patch env old new =
+  use Text ==
+  replace _ =
+    replacement = bench.tree.create env new
+    JSValue.invoke1_ "replaceWith" (bench.tree.domOf replacement) (bench.tree.domOf old)
+    replacement
+  match (old, new) with
+    (OnTxt node _ oldText, TTxt key text) ->
+      if oldText == text then OnTxt node key text
+      else
+        JSValue.setPropertyText "nodeValue" text node
+        OnTxt node key text
+    (OnMemo _ input drawn, TMemo key input' view) ->
+      if input === input' then old
+      else
+        (node, owns) = view()
+        Ref.write drawn (bench.tree.patch env (Ref.read drawn) node)
+        if owns then
+          memos = bench.tree.Env.memos env
+          Ref.write memos (Map.insert key (drawn, view) (Ref.read memos))
+        else ()
+        OnMemo key input' drawn
+    (OnEl node tag _ attrs current events children, TEl tag' key' attrs' listeners' children') | tag == tag' ->
+      bench.mini.patchAttrs node attrs attrs'
+      Ref.write current listeners'
+      newEvents = List.filter (event -> not (List.contains event events)) (List.distinct (List.map at1 listeners'))
+      List.foreach (event -> bench.tree.listen env node current event) newEvents
+      children'' = bench.tree.patchChildren env node children children'
+      OnEl node tag key' attrs' current (events List.++ newEvents) children''
+    _ -> replace()
+
+{{ The children of {bench.tree.patch}: matched by position when the keys are the same in the same order. Otherwise the common prefix and suffix are patched in place. If what is left has had its first and last children swapped, and the rest is unchanged, only those two move. Anything else is reconciled by key, with ink's `stableIndices` deciding the moves. }}
+bench.tree.patchChildren : bench.tree.Env g -> JSValue -> [bench.tree.Mounted g] -> [bench.tree.TNode g] ->{g, JS} [bench.tree.Mounted g]
+bench.tree.patchChildren env parent olds news =
+  use List :+ ++ +:
+  byPosition acc olds' news' = match (olds', news') with
+    (old +: restOld, new +: restNew) -> byPosition (acc :+ bench.tree.patch env old new) restOld restNew
+    ([], new +: restNew) ->
+      mounted = bench.tree.create env new
+      JSValue.invoke1_ "appendChild" (bench.tree.domOf mounted) parent
+      byPosition (acc :+ mounted) [] restNew
+    (old +: restOld, []) ->
+      JSValue.invoke0_ "remove" (bench.tree.domOf old)
+      byPosition acc restOld []
+    ([], []) -> acc
+  sameKeys olds' news' = match (olds', news') with
+    (old +: restOld, new +: restNew) -> (bench.tree.Mounted.key old === bench.tree.TNode.key new) && sameKeys restOld restNew
+    ([], []) -> true
+    _ -> false
+  sameKey old new = bench.tree.Mounted.key old === bench.tree.TNode.key new
+  takePrefix acc olds' news' = match (olds', news') with
+    (old +: restOld, new +: restNew) | sameKey old new -> takePrefix (acc :+ bench.tree.patch env old new) restOld restNew
+    _ -> (acc, olds', news')
+  takeSuffix acc olds' news' = match (olds', news') with
+    (restOld :+ old, restNew :+ new) | sameKey old new -> takeSuffix (bench.tree.patch env old new +: acc) restOld restNew
+    _ -> (acc, olds', news')
+  trimmed _ =
+    (prefix, oldMiddle, newMiddle) = takePrefix [] olds news
+    (suffix, oldMiddle', newMiddle') = takeSuffix [] oldMiddle newMiddle
+    start = List.last prefix |> Optional.map bench.tree.domOf
+    placeAfter previous node = match previous with
+      Some before -> JSValue.invoke1_ "after" node before
+      None -> JSValue.invoke1_ "prepend" node parent
+    swapped _ = match (oldMiddle', newMiddle') with
+      (oldFirst +: (oldInner :+ oldLast), newFirst +: (newInner :+ newLast)) | sameKey oldFirst newLast && sameKey oldLast newFirst && sameKeys oldInner newInner ->
+        first = bench.tree.patch env oldLast newFirst
+        inner = byPosition [] oldInner newInner
+        last = bench.tree.patch env oldFirst newLast
+        placeAfter start (bench.tree.domOf first)
+        placeAfter (Some (List.last inner |> Optional.map bench.tree.domOf |> Optional.getOrElse (bench.tree.domOf first))) (bench.tree.domOf last)
+        Some ([first] ++ inner ++ [last])
+      _ -> None
+    middle =
+      if List.isEmpty oldMiddle' && List.isEmpty newMiddle' then []
+      else match swapped() with
+        Some patched -> patched
+        None -> bench.tree.patchKeyed env parent start oldMiddle' newMiddle'
+    prefix ++ middle ++ suffix
+  if sameKeys olds news then byPosition [] olds news else trimmed()
+
+{{ The keyed reconcile of {bench.tree.patchChildren}, for the children after `start` (the DOM node they follow, or `None` at the start of `parent`). }}
+bench.tree.patchKeyed : bench.tree.Env g -> JSValue -> Optional JSValue -> [bench.tree.Mounted g] -> [bench.tree.TNode g] ->{g, JS} [bench.tree.Mounted g]
+bench.tree.patchKeyed env parent start olds news =
+  keyedOld = cases (mounted, index) -> (bench.tree.Mounted.key mounted, (index, mounted))
+  oldByKey = List.indexed olds |> List.map keyedOld |> Map.fromList
+  newKeys = List.map bench.tree.TNode.key news
+  found = List.map (key -> Map.get key oldByKey) newKeys
+  render = cases
+    (node, Some (_, mounted)) -> bench.tree.patch env mounted node
+    (node, None)              -> bench.tree.create env node
+  rendered = List.zip news found |> List.map render
+  keep = Set.fromList newKeys
+  dropMissing mounted = if Set.contains (bench.tree.Mounted.key mounted) keep then () else JSValue.invoke0_ "remove" (bench.tree.domOf mounted)
+  List.foreach dropMissing olds
+  stable = lib.dfreeman_ink_r5.Incremental.reconcile.stableIndices (List.map (Optional.map at1) found)
+  place previous = cases
+    [] -> ()
+    (mounted, isStable) +: rest ->
+      node = bench.tree.domOf mounted
+      if isStable then place (Some node) rest
+      else
+        match previous with
+          Some before -> JSValue.invoke1_ "after" node before
+          None -> JSValue.invoke1_ "prepend" node parent
+        place (Some node) rest
+  place start (List.zip rendered stable)
+  rendered
+
+{{ Every prefix of a key, itself included. }}
+bench.tree.prefixes : Key -> [Key]
+bench.tree.prefixes = cases
+  Key segments -> List.map (n -> Key (List.take n segments)) (List.range 0 (List.size segments Nat.+ 1))
+
+{{
+Mounts `ui` on `root` with this module's tree in place of Proscenium's renderer and ink, with `provider` for the UI's abilities.
+
+Everything runs inside the provider, as a Proscenium session does: one coroutine renders, then waits ({app.Session.internal.Yield}) for the next event, so the provider's state lives on between events. An event runs its listeners for that event name, each with its payload decoded by the listener's extractor (a click's is empty). Their `Update.send` messages go to the cells they address, and the paths of the cells that changed, with every prefix of them, are marked.
+
+Then only what owns those cells is drawn again. A cell inside an element belongs to the nearest element drawn as a memo, and that element's view runs again on its own, as ink re-runs only the computation that owns a cell. A cell outside every element, at the root, draws the whole UI again. Either way, an element whose name, modifiers and body are unchanged, and which holds no changed cell, is skipped.
+
+A provider that schedules or suspends work (`Schedule`) is not supported.
+}}
+bench.tree.mountWith : Provider JS g -> JSValue -> '{g, Render g} () ->{JS} ()
+bench.tree.mountWith provider root ui =
+  use Nat +
+  noop : Text -> [(Text, Exists (Listener g))] -> JSValue ->{JS} ()
+  noop _ _ _ = ()
+  env = TreeEnv (global "document") (JS.ref Map.empty) (JS.ref Set.empty) (JS.ref 0) (JS.ref noop) (JS.ref Map.empty)
+  mounted = JS.ref ([] : [bench.tree.Mounted g])
+  render : '{g, JS} ()
+  render _ =
+    Ref.write (bench.tree.Env.generation env) (Ref.read (bench.tree.Env.generation env) + 1)
+    (_, nodes, _) = bench.tree.collect env Key.root ui
+    Ref.write mounted (bench.tree.patchChildren env root (Ref.read mounted) nodes)
+    Ref.write (bench.tree.Env.dirty env) Set.empty
+  deliver : Message ->{g, JS} Optional Key
+  deliver = cases
+    Message path messageAny ->
+      cells = bench.tree.Env.cells env
+      match Map.get path (Ref.read cells) with
+        Some (TreeCell made value reducer) ->
+          value' = reducer value messageAny
+          Ref.write cells (Map.insert path (TreeCell made value' reducer) (Ref.read cells))
+          dirty = bench.tree.Env.dirty env
+          Ref.write dirty (List.foldLeft (set prefix -> Set.insert prefix set) (Ref.read dirty) (bench.tree.prefixes path))
+          Some path
+        None -> None
+  owner : Key ->{JS} Optional Key
+  owner path =
+    memos = Ref.read (bench.tree.Env.memos env)
+    candidates = match path with
+      Key segments -> List.map (n -> Key (List.take n segments)) (List.reverse (List.range 1 (List.size segments)))
+    List.find (candidate -> Map.contains candidate memos) candidates
+  drawAt : Key ->{g, JS} ()
+  drawAt key = match Map.get key (Ref.read (bench.tree.Env.memos env)) with
+    Some (drawn, view) -> Ref.write drawn (bench.tree.patch env (Ref.read drawn) (at1 view()))
+    None -> ()
+  redraw : [Key] ->{g, JS} ()
+  redraw changed =
+    owners = List.map owner changed
+    if List.any Optional.isNone owners then render()
+    else
+      keys = Set.fromList (List.filterMap (o -> o) owners)
+      properPrefixes = cases
+        Key segments -> List.map (n -> Key (List.take n segments)) (List.range 1 (List.size segments))
+      outermost = Set.toList keys |> List.filter (key -> not (List.any (prefix -> Set.contains prefix keys) (properPrefixes key)))
+      Ref.write (bench.tree.Env.generation env) (Ref.read (bench.tree.Env.generation env) + 1)
+      List.foreach drawAt outermost
+      Ref.write (bench.tree.Env.dirty env) Set.empty
+  runListener : Exists (Listener g) ->{g, JS} [Message]
+  runListener existsListener =
+    run : Listener g a ->{g, JS} [Message]
+    run = cases
+      Listener extractor handler ->
+        match runJson Json.null extractor with
+          Right data ->
+            collectMessages acc = cases
+              { _ } -> acc
+              { Update.send message -> resume } -> handle resume () with collectMessages (acc List.:+ message)
+            handle handler data with collectMessages []
+          Left _ -> []
+    Exists.apply run existsListener
+  handleEvent : (Text, [(Text, Exists (Listener g))]) ->{g, JS} ()
+  handleEvent = cases
+    (event, listeners) ->
+      matching = List.filter (cases (name, _) -> name Text.== event) listeners
+      messages = List.flatMap (cases (_, listener) -> runListener listener) matching
+      changed = List.filterMap deliver messages
+      if List.isEmpty changed then () else redraw changed
+  loop : (Text, [(Text, Exists (Listener g))]) ->{g, JS, Yield () (Text, [(Text, Exists (Listener g))])} ()
+  loop event =
+    handleEvent event
+    loop (Yield.yield ())
+  noSchedule : '{h, Schedule JS g} r ->{h} r
+  noSchedule body = handle body() with cases
+    { r } -> r
+    { Schedule.effectFinalizer _ -> _ } -> bug "bench.tree: Schedule is not supported"
+    { Schedule.getScheduler _ -> _ } -> bug "bench.tree: Schedule is not supported"
+    { Schedule.resume _ -> _ } -> bug "bench.tree: Schedule is not supported"
+    { Schedule.suspend _ -> _ } -> bug "bench.tree: Schedule is not supported"
+    { Schedule.internal.switch _ -> _ } -> bug "bench.tree: Schedule is not supported"
+  session : '{JS, Yield () (Text, [(Text, Exists (Listener g))])} ()
+  session _ = noSchedule do
+    Provider.run provider do
+      render()
+      loop (Yield.yield ())
+  continuation : Ref JS (Optional ((Text, [(Text, Exists (Listener g))]) ->{JS, Yield () (Text, [(Text, Exists (Listener g))])} ()))
+  continuation = JS.ref None
+  keep : Either () ((), (Text, [(Text, Exists (Listener g))]) ->{JS, Yield () (Text, [(Text, Exists (Listener g))])} ()) ->{JS} ()
+  keep = cases
+    Right (_, next) -> Ref.write continuation (Some next)
+    Left _ -> Ref.write continuation None
+  fire : Text -> [(Text, Exists (Listener g))] -> JSValue ->{JS} ()
+  fire event listeners _ = match Ref.read continuation with
+    Some next -> keep (Yield.run do next (event, listeners))
+    None -> ()
+  Ref.write (bench.tree.Env.fire env) fire
+  keep (Yield.run session)
+
+{{ {bench.tree.mountWith} for a UI with no abilities of its own. }}
+bench.tree.mount : JSValue -> '{Render {}} () ->{JS} ()
+bench.tree.mount root ui = bench.tree.mountWith Provider.none root ui
+
+{{ `run bench.tree.rows.build <bare|debug> <outDir>`: {bench.rows.ui}, unchanged, on {bench.tree.mount}, written as `rows-<config>`. }}
+bench.tree.rows.build : '{IO, Exception} ()
+bench.tree.rows.build = do
+  use Text ++
+  start _ = bench.tree.mount (global "document" :: "body") bench.rows.ui
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("rows-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+{{ `run bench.tree.rowsfg.build <bare|debug> <outDir>`: {bench.rowsfg.ui}, round 7's fine-grained rows app, unchanged, on {bench.tree.mountWith} with its provider, written as `rows-<config>`. }}
+bench.tree.rowsfg.build : '{IO, Exception} ()
+bench.tree.rowsfg.build = do
+  use Text ++
+  start _ = bench.tree.mountWith rowsfg.provider (global "document" :: "body") rowsfg.ui
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("rows-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+---
+
+The first version, for UIs with no abilities of their own (`g = {}`), timed as `tree2` on 2026-10-30.
+
+{{
+A rendered view of {bench.tree.mount}, Proscenium's {type Render} API on a tree of its own with no ink. An element is a tag, its key, attributes, listeners and children. A text node holds its text. A memo stands for an element whose body may be skipped: its input is the element's name, modifiers and body closure, and it is redrawn only when that input differs.
+
 A key is the node's path from the root: its parent's path, then a region's key (`Tagged 0`) where the node is inside a region, then its position among its siblings (`Untagged`). So a node inside a region keeps its key when the region moves.
 }}
 type bench.tree.TNode

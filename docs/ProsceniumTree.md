@@ -168,12 +168,25 @@ Against the same source on ink (the report's "A first prototype behind Prosceniu
   of 31.
 - **Size:** the module is 24 KB brotli against 40 KB.
 
-Not in the prototype:
-- **API still missing:** `Effect`, providers, `Keyed`, `Selector`, `onCleanup`,
-  namespaces, and payloads other than a click's. So the cards and meals apps don't run
-  on it yet.
-- **Select:** costs the same as on ink. The plain rows app keeps the selection in its
-  model, so both re-run the whole table.
+Then providers, `Keyed` and `Selector`, for round 7's fine-grained rows app:
+- **A session like Proscenium's:** the tree is polymorphic in the UI's abilities and runs
+  render and events inside `Provider.run`, paused with `Yield` between events.
+- **Redraw by owner:** a message to a cell redraws only the element that owns it, as ink
+  re-runs only the computation that owns a cell. An element whose body uses a cell is
+  registered by path with a cell holding what it drew.
+
+That app runs on it unchanged:
+- **Select:** costs the same as on ink, 0.6 ms.
+- **Swap and remove:** a third of ink's time.
+- **Creating rows:** 12–36% less.
+- **Update every 10th:** slower, 9.0 against 5.8 ms. Its cells, dirty marks and registry
+  are maps keyed by paths, and comparing paths of `Any` segments dominates. The design
+  should give each path a number when it is first seen.
+
+Not in the prototype yet:
+- `Effect`, `onCleanup`, namespaces, and payloads other than a click's. So the cards and
+  meals apps don't run on it.
+- Cells and registry entries of removed elements are not dropped.
 
 ## Open questions for the prototype
 

@@ -1902,10 +1902,10 @@ And for the build:
 
 | | Round 7 | Floor, data | Floor, one handler | Leptos |
 | --- | --- | --- | --- | --- |
-| module, brotli | 139 KB | 18 KB | 19 KB | 47 KB |
+| module, brotli | 43 KB | 18 KB | 19 KB | 47 KB |
 | loader, brotli | 11.6 KB | 11.6 KB | 11.6 KB | 5.4 KB |
-| terms warp emits | 2,884 | 179 | 193 | |
-| warp's build | 3.26 s | 0.24 s | 0.27 s | |
+| terms warp emits | 526 | 179 | 193 | |
+| warp's build | 0.77 s | 0.24 s | 0.27 s | |
 
 What this says:
 
@@ -1919,9 +1919,10 @@ What this says:
   the current API would have. It is still well ahead of round 7's 41 operations a row.
   Phase 4's tail-resumptive path would narrow it further: these 11 operations are exactly
   the shape it targets.
-- **The size is Proscenium's and ink's code.** Without them, the module is 18 KB brotli
-  and warp emits 179 terms in a quarter of a second. Round 7's 139 KB is mostly the two
-  libraries.
+- **Most of the size is Proscenium's and ink's code.** Without them, the module is
+  18 KB brotli against round 7's 43 KB, and warp emits 179 terms instead of 526, in a
+  third of the time. (An earlier version of this section said 139 KB and 2,884 terms;
+  those were the cards app's figures, read from the wrong line of the build log.)
 - **A virtual DOM still pays for the whole view on every message.** A click rebuilds all
   1,000 memo nodes and compares their inputs:
   - **select a row:** 70,000 allocations against round 7's 2,900, since round 7's
@@ -1997,6 +1998,58 @@ What this says:
 - **Without the swap fast path,** the general keyed reconcile over 998 rows, with keys
   that are paths of `Any` segments, made swap slower than ink (14.0 against 8.1 ms in the
   first run).
+
+#### The fine-grained rows app, with its provider
+
+Round 7's own rows app, `bench.rowsfg.ui`, keeps each row's label in a `Keyed` store and
+the selection in a `Selector`, both provided by a `Provider`. To run it, the tree gained
+three things:
+- **Abilities:** it is polymorphic in the UI's abilities.
+- **A coroutine:** render and event handling run inside `Provider.run`, paused with
+  Proscenium's own `Yield` between events, as a `Session` is. The provider's state lives
+  on between events.
+- **Redraw by owner:** a message to a cell redraws only the element that owns it. Each
+  element that uses a cell is registered with a cell holding what it drew, so its view
+  can run again on its own. ink does the same with the computation that owns a cell. A
+  cell at the root still draws the whole UI.
+
+`bench.rowsfg.ui` runs on it unchanged, with its provider, and matches Leptos over 200
+steps on two seeds. Interleaved, medians of 9, load 9–17, to the DOM
+(`results/round7-treefg-registered-rows.json`):
+
+| Operation (ms) | Leptos | Fine-grained rows on ink (round 7) | **Fine-grained rows on the tree** |
+| --- | --- | --- | --- |
+| create 1,000 rows | 26.6 | 80.5 | **70.9** |
+| replace 1,000 rows | 28.4 | 89.8 | **57.1** |
+| append 1,000 rows | 22.1 | 57.1 | 59.1 |
+| update every 10th row | 0.9 | 5.8 | 9.0 |
+| select a row | 0.6 | 0.6 | 0.6 |
+| swap two rows | 0.6 | 6.1 | **1.9** |
+| remove a row | 1.0 | 5.6 | **1.7** |
+| clear 2,000 rows | 16.6 | 34.5 | **19.9** |
+| create 10,000 rows | 169.7 | 593.4 | **460.2** |
+| clear 10,000 rows | 82.8 | 122.1 | **65.0** |
+| JS heap at 10,000 rows (MB) | 9.6, plus 21.8 linear | 152.3 | 144.4 |
+
+What this says:
+- **Selection is as cheap as on ink,** 0.6 ms. Before owners were redrawn on their own,
+  a selection redrew the table from the root and took 15 ms
+  (`round7-treefg-first-rows.json`).
+- **Most operations are faster than round 7 on ink.** The exceptions are append, which
+  is level, and update every 10th.
+- **Update every 10th is slower,** 9.0 against 5.8 ms. It allocates less than ink
+  (260,688 against 349,244, `results/sites-rows-tree.json`), but it calls warp's
+  `compareValues` 148,679 times. The cells, the dirty marks and the registry are maps and
+  sets keyed by paths, and each lookup compares lists of `Any` segments.
+
+  A filter that compared the 100 changed owners in pairs was one part of the cost. It
+  now looks owners' prefixes up in a set, which took the ratio to ink from 1.55 to 1.35
+  at load 19–30 (`round7-treefg-rows.json`).
+
+  The next change is to intern each path as a number when it is first seen, so those
+  maps compare integers.
+- **The cost of registering owners** is a map entry per row, which the build of 10,000
+  rows pays: its heap is 144 MB here against 94 MB for the plain app on the tree.
 
 ### One-shot continuations: what resumes twice
 

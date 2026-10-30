@@ -196,9 +196,20 @@ own:
 | handler operations a row | 31 | 11 |
 | module, brotli | 40 KB | 24 KB |
 
-It does not yet have effects, providers, `Keyed` or `Selector`. So the cards and meals
-apps, and the fine-grained rows app, don't run on it yet. Bringing those over is the
-next step, if you want this direction.
+It now also runs round 7's fine-grained rows app unchanged, with its provider, `Keyed`
+and `Selector`:
+- **The session:** render and events run inside `Provider.run`, paused with `Yield`.
+- **Redraws:** a message redraws only the element that owns the cell.
+
+Against that app on ink:
+- **Select:** costs the same, 0.6 ms.
+- **Swap and remove:** a third of ink's time.
+- **Creating rows:** 12–36% less.
+- **Update every 10th:** slower, 9.0 against 5.8 ms. The cells and the redraw registry
+  are maps keyed by paths of `Any` segments, so every lookup compares lists. Interning
+  paths as numbers is the next change.
+
+Effects and cleanups aren't in it yet, so the cards and meals apps don't run on it.
 
 ## One-shot continuations
 
