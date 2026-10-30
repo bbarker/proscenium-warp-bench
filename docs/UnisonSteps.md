@@ -282,6 +282,40 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/proscenium/perf-r7-142> upgrade dfreeman_warp_r7e dfreeman_warp_r7_142
 ```
 
+- [ ] The same work as a stack of branches on 1.4.2, so that it can be taken a level at a
+      time:
+  - `offer-1-compare-eq`: round 1, `compare` and `==` in wasm, with 1.4.2's JS as their
+    fallback. Lists are still JS here, so the fallback is what compares them.
+  - `offer-2-list`: plus round 4's wasm `List` and its fuzz test.
+  - `perf-r7-142`: plus round 4's interop functions and all of round 7.
+
+  The parts are not independent: round 4's `compare` and `==` contain round 1's, and round
+  7 builds on round 4's interop functions. So each branch contains the one before it. The
+  small merge files are cut from `warp--perf-r7-142.u`:
+  - `warp--offer-1-compare-eq.u`: the JS fallback and the release notes;
+  - `warp--offer-2-list.u`: the JS fallback again, the test list and the release notes.
+
+  **The fallback has to be loaded after the round 4 list file,** which redefines
+  `Universal_compare.jsSource` with 1.3.0's JS. That version has no `BigInt` case, so a
+  `Natural` compare panics in JS, and warp's test runner then waits forever (1.4.2's
+  `Natural` test hung that way until the order was fixed). Both branches pass warp's full
+  suite, and `offer-2-list` also passes the list fuzz test.
+
+```ucm
+@dfreeman/warp/releases/1.4.2> branch /offer-1-compare-eq
+@dfreeman/warp/offer-1-compare-eq> load unison/scratch/warp--perf.u
+@dfreeman/warp/offer-1-compare-eq> update
+@dfreeman/warp/offer-1-compare-eq> load unison/scratch/warp--offer-1-compare-eq.u
+@dfreeman/warp/offer-1-compare-eq> update
+@dfreeman/warp/offer-1-compare-eq> branch /offer-2-list
+@dfreeman/warp/offer-2-list> load target/unison/frontend-bench/scratch-warp--perf-list.u
+@dfreeman/warp/offer-2-list> update
+@dfreeman/warp/offer-2-list> load unison/scratch/warp--perf-r4.u
+@dfreeman/warp/offer-2-list> update
+@dfreeman/warp/offer-2-list> load unison/scratch/warp--offer-2-list.u
+@dfreeman/warp/offer-2-list> update
+```
+
 - [ ] The same app for stock Proscenium (`bench.jfbstock`, plain `useState` and a region
       per row), on a branch of `bench`:
 

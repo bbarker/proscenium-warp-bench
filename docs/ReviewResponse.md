@@ -142,6 +142,11 @@ work worth taking, rebased onto 1.4.2.**
 - **Tests:** your tests (with 1.4.2's `Integer` and `Natural` ones) and our list fuzz
   test pass.
 - **Proscenium:** `perf-r7-142` on it matches Leptos and round 5, and times the same.
+- **To take it in parts,** two smaller branches on 1.4.2 stack under it:
+  - `offer-1-compare-eq`: `compare` and `==` in wasm;
+  - `offer-2-list`: plus the wasm `List`.
+
+  Each passes your tests; the second also passes the list fuzz test.
 
 ## Design notes, not built
 

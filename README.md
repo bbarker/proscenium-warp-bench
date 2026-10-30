@@ -80,6 +80,8 @@ clone of the upstream project named in the first row, and the report writes them
 | [`perf-r7`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7) | From `perf-r4`: JS interop, `Nat.toText` and `Text.indexOf` take unboxed arguments (`jsUnboxed`); `==` compares a function with a closure by id in wasm; `compare`, `==` and Boolean intrinsics return shared boxes; `Text.size`/`take`/`drop` over `wasm:js-string`. | round 7 |
 | [`perf-r7u`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7u) | `perf-r7` with `Nat.toText` written in Unison (an experiment: 8 times slower than unboxed JS). | round 7 |
 | [`perf-r7w`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7w) | `perf-r7` with `Nat.toText` in the instruction DSL (an experiment: 5 times slower than unboxed JS). | round 7 |
+| [`offer-1-compare-eq`](https://share.unison-lang.org/@nusentry/warp/code/offer-1-compare-eq) | On warp 1.4.2: round 1 only, `compare` and `==` in wasm with 1.4.2's JS as the fallback. Passes warp's tests. | to offer |
+| [`offer-2-list`](https://share.unison-lang.org/@nusentry/warp/code/offer-2-list) | `offer-1` + round 4's wasm `List` and its fuzz test. Passes warp's tests and the fuzz test. | to offer |
 | [`perf-r7-142`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7-142) | **All of the above that is worth taking, rebased onto warp 1.4.2:** rounds 1, 4 and 7, with 1.4.2's `Universal.compare` as the JS fallback. warp's tests and the list fuzz test pass. | round 7 |
 
 A note on 1.3.0: Proscenium 0.4.3, which the benchmark builds on, uses warp 1.3.0. The warp changes

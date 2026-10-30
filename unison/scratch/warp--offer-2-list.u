@@ -1,0 +1,192 @@
+{{ The JS `Universal.compare` of warp 1.4.2, kept as the fallback of {Universal_compare}: wasm compares two values of the same kind, and everything else, including a plain function against a closure, comes here and keeps 1.4.2's ordering. }}
+internal.runtime.replacements.unison_base.Universal_compare.jsSource : Text
+internal.runtime.replacements.unison_base.Universal_compare.jsSource =
+  """
+  (() => {
+    function compareJSPrimitives(a, b) {
+      return a < b ? -1 : a > b ? 1 : 0;
+    }
+    function compareArgs(rt, as, bs) {
+      for (let i = 0, len = rt.Args_length(as); i < len; i++) {
+        let a = rt.Args_at(as, i);
+        let b = rt.Args_at(bs, i);
+        if (a == null) return -1;
+        if (b == null) return 1;
+        let cmp = compare(rt, a, b);
+        if (cmp !== 0) return cmp;
+      }
+      return 0;
+    }
+    // This is likely inconsistent with how the real runtime orders differently-typed things, which could result in problems if e.g. a `Map` with `Any` keys produced in one runtime is serialised to the other. Not going to worry about that for demo purposes, though.
+    function compare(rt, a, b) {
+      if (a === b) return 0;
+      if (!rt.Value_detect(a) || !rt.Value_detect(b)) rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Attempted to compare non-value'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+      let aTag = rt.Value_getTag(a);
+      let bTag = rt.Value_getTag(b);
+      if (!rt.js.valueTagsCompatible(rt, aTag, bTag)) return compareJSPrimitives(aTag, bTag);
+      switch (aTag) {
+        case rt.Nat_TAG.value:
+        case rt.Int_TAG.value: {
+          let aRaw = rt.Nat_getValue(a);
+          let bRaw = rt.Nat_getValue(b);
+          let aVal = aTag === rt.Nat_TAG.value ? BigInt.asUintN(64, aRaw) : BigInt.asIntN(64, aRaw);
+          let bVal = bTag === rt.Nat_TAG.value ? BigInt.asUintN(64, bRaw) : BigInt.asIntN(64, bRaw);
+          return compareJSPrimitives(aVal, bVal);
+        }
+        case rt.Float_TAG.value:
+          return compareJSPrimitives(rt.Float_getValue(a), rt.Float_getValue(b));
+        case rt.TypeLink_TAG.value:
+          return rt.compareIds(rt.TypeLink_getId(a), rt.TypeLink_getId(b));
+        case rt.TermLink_TAG.value: {
+          let idComparison = rt.compareIds(rt.TermLink_getId(a), rt.TermLink_getId(b));
+          if (idComparison !== 0) return idComparison;
+          return compareJSPrimitives(rt.TermLink_getConstructor(a), rt.TermLink_getConstructor(b));
+        }
+        case rt.Char_TAG.value:
+          return compareJSPrimitives(rt.Char_getValue(a), rt.Char_getValue(b));
+        case rt.Text_TAG.value:
+          return compareJSPrimitives(rt.Text_getValue(a), rt.Text_getValue(b));
+        case rt.Data_TAG.value: {
+          let typeComparison = rt.compareIds(rt.Data_getType(a), rt.Data_getType(b));
+          if (typeComparison !== 0) return typeComparison;
+          let constructorComparison = compareJSPrimitives(rt.Data_getConstructor(a), rt.Data_getConstructor(b));
+          if (constructorComparison !== 0) return constructorComparison;
+          return compareArgs(rt, rt.Data_getArgs(a), rt.Data_getArgs(b));
+        }
+        case rt.Request_TAG.value: {
+          let dataComparison = compare(rt, rt.Request_getData(a), rt.Request_getData(b));
+          if (dataComparison !== 0) return dataComparison;
+          return compare(rt, rt.Request_getContinue(a), rt.Request_getContinue(b));
+        }
+        case rt.Function_TAG.value:
+        case rt.Closure_TAG.value: {
+          let idComparison = rt.compareIds(rt.Function_getId(a), rt.Function_getId(b));
+          if (idComparison !== 0) return idComparison;
+          let aBound = aTag === rt.Closure_TAG.value ? rt.Closure_getBound(a) : null;
+          let bBound = bTag === rt.Closure_TAG.value ? rt.Closure_getBound(b) : null;
+          if (aBound === null && bBound == null) return 0;
+          if (aBound === null) return -1;
+          if (bBound === null) return 1;
+          return compareArgs(rt, aBound, bBound);
+        }
+        case rt.Continuation_TAG.value:
+          let dataComparison = compareArgs(rt, rt.Continuation_getData(a), rt.Continuation_getData(b));
+          if (dataComparison !== 0) return dataComparison;
+          if (rt.Continuation_getImpl(a) === rt.Continuation_getImpl(b)) return 0;
+          rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unable to compare different continuations with the same carried data'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+        case rt.Quote_TAG.value:
+          return compare(rt, rt.Quote_getValue(a), rt.Quote_getValue(b));
+        case rt.Code_TAG.value:
+          return compare(rt, rt.Code_getValue(a), rt.Code_getValue(b));
+        case rt.Foreign_TAG.value: {
+          let valueA = rt.Foreign_getValue(a);
+          let valueB = rt.Foreign_getValue(b);
+          if (valueA === valueB) return 0;
+          if (typeof valueA === 'bigint' && typeof valueB === 'bigint') {
+            return compareJSPrimitives(valueA, valueB);
+          }
+          if (valueA instanceof rt.js.JSValue && valueB instanceof rt.js.JSValue) {
+            valueA = valueA.get();
+            valueB = valueB.get();
+            if (valueA === valueB) return 0;
+            if (typeof valueA === typeof valueB) {
+              switch (typeof valueA) {
+                case 'number':
+                case 'string':
+                case 'boolean':
+                case 'bigint':
+                case 'undefined':
+                  return compareJSPrimitives(valueA, valueB);
+                default:
+                  // fallthrough
+              }
+            }
+          }
+          rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unable to compare different foreign values'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+        }
+        case rt.Boolean_TAG.value:
+          return compareJSPrimitives(rt.Boolean_getValue(a), rt.Boolean_getValue(b));
+        case rt.Array_TAG.value:
+          return compareArgs(rt.Array_getContents(a), rt.Array_getContents(b));
+        case rt.ByteArray_TAG.value: {
+          let aView = rt.ByteArray_getContents(a);
+          let bView = rt.ByteArray_getContents(b);
+          let aBytes = new Uint8Array(aView.buffer, aView.byteOffset, aView.byteLength);
+          let bBytes = new Uint8Array(bView.buffer, bView.byteOffset, bView.byteLength);
+          for (let i = 0, len = Math.max(aBytes.byteLength, bBytes.byteLength); i < len; i++) {
+            let aByte = aBytes[i];
+            let bByte = bBytes[i];
+            if (aByte == null) return -1;
+            if (bByte == null) return 1;
+            if (aByte !== bByte) return aByte < bByte ? -1 : 1;
+          }
+          return 0;
+        }
+        case rt.Bytes_TAG.value: {
+          let aBytes = rt.Bytes_getValue(a).toUint8Array();
+          let bBytes = rt.Bytes_getValue(b).toUint8Array();
+          for (let i = 0, len = Math.max(aBytes.byteLength, bBytes.byteLength); i < len; i++) {
+            let aByte = aBytes[i];
+            let bByte = bBytes[i];
+            if (aByte == null) return -1;
+            if (bByte == null) return 1;
+            if (aByte !== bByte) return aByte < bByte ? -1 : 1;
+          }
+          return 0;
+        }
+        case rt.List_TAG.value: {
+          let aList = rt.List_getValue(a);
+          let bList = rt.List_getValue(b);
+          for (let i = 0, len = Math.max(aList.size, bList.size); i < len; i++) {
+            let aEl = aList.at(i);
+            let bEl = bList.at(i);
+            if (aEl == null) return -1;
+            if (bEl == null) return 1;
+            let cmp = compare(rt, aEl, bEl);
+            if (cmp !== 0) return cmp;
+          }
+          return 0;
+        }
+        default:
+          rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unknown value type for comparison'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+      }
+    }
+    return (rt, a, b) => rt.Int(BigInt(compare(rt, a, b)));
+  })()
+  """
+
+tests.builtins : [WasmTest]
+tests.builtins =
+  List.map
+    (WasmTest.group "builtins")
+    [ universal
+    , builtins.list
+    , builtins.nat
+    , builtins.int
+    , builtins.float
+    , builtins.natural
+    , integer
+    , builtins.bytes
+    , builtins.char
+    , builtins.text
+    , builtins.pattern
+    , charClass
+    , textPatterns
+    , immutableByteArray
+    , mutableByteArray
+    , immutableArray
+    , mutableArray
+    ]
+
+ReleaseNotes : Doc
+ReleaseNotes =
+  {{
+  * Further hardened {Universal.compare} against edge cases in bare function
+    and closure comparison.
+  * 2026-10-28: `Universal.compare` and `Universal.==` compare values of the
+    same kind in wasm ({Universal_compare.defineCompareValues},
+    {Universal_eq.defineEqValues}), and fall back to JS for the rest.
+  * 2026-10-29: `List` is a balanced tree of 32-element arrays in wasm
+    instead of a JS finger tree, with a differential test of 9,000 random
+    list operations against the native runtime (`tests.builtins.listFuzz`).
+  }}
