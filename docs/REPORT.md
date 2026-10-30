@@ -1983,9 +1983,11 @@ boundary (round 7).
      ink's `reconcile.handler`, which every element goes through, has that shape: it
      resumes once and re-handles with new state. Each operation now costs a frame-list
      walk, 4 allocations to capture, a copy of the frames on resume, and 5 to re-handle.
-   - Give calls in from JS (event listeners, microtasks) a cheaper entry than
-     `callDirect`'s root continuation.
-   - Native stack switching later.
+   - A cheaper entry for calls in from JS than `callDirect`'s root continuation is
+     not worth it in these apps. Every operation makes 7 calls in, and an animated move
+     makes 100 over 31 frames, against thousands of allocations per operation.
+   - Native stack switching later. One-shot continuations are enough for Proscenium
+     and ink ("One-shot continuations: what resumes twice").
 3. **warp: the rest of the builtins in wasm,** `Text`'s operations over the
    `wasm:js-string` builtins first, then closed-world mode measured again on the narrower
    boundary.
