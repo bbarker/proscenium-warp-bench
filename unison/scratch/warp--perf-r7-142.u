@@ -1,0 +1,729 @@
+{{ The JS `Universal.compare` of warp 1.4.2, kept as the fallback of {Universal_compare}: wasm compares two values of the same kind, and everything else, including a plain function against a closure, comes here and keeps 1.4.2's ordering. }}
+internal.runtime.replacements.unison_base.Universal_compare.jsSource : Text
+internal.runtime.replacements.unison_base.Universal_compare.jsSource =
+  """
+  (() => {
+    function compareJSPrimitives(a, b) {
+      return a < b ? -1 : a > b ? 1 : 0;
+    }
+    function compareArgs(rt, as, bs) {
+      for (let i = 0, len = rt.Args_length(as); i < len; i++) {
+        let a = rt.Args_at(as, i);
+        let b = rt.Args_at(bs, i);
+        if (a == null) return -1;
+        if (b == null) return 1;
+        let cmp = compare(rt, a, b);
+        if (cmp !== 0) return cmp;
+      }
+      return 0;
+    }
+    // This is likely inconsistent with how the real runtime orders differently-typed things, which could result in problems if e.g. a `Map` with `Any` keys produced in one runtime is serialised to the other. Not going to worry about that for demo purposes, though.
+    function compare(rt, a, b) {
+      if (a === b) return 0;
+      if (!rt.Value_detect(a) || !rt.Value_detect(b)) rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Attempted to compare non-value'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+      let aTag = rt.Value_getTag(a);
+      let bTag = rt.Value_getTag(b);
+      if (!rt.js.valueTagsCompatible(rt, aTag, bTag)) return compareJSPrimitives(aTag, bTag);
+      switch (aTag) {
+        case rt.Nat_TAG.value:
+        case rt.Int_TAG.value: {
+          let aRaw = rt.Nat_getValue(a);
+          let bRaw = rt.Nat_getValue(b);
+          let aVal = aTag === rt.Nat_TAG.value ? BigInt.asUintN(64, aRaw) : BigInt.asIntN(64, aRaw);
+          let bVal = bTag === rt.Nat_TAG.value ? BigInt.asUintN(64, bRaw) : BigInt.asIntN(64, bRaw);
+          return compareJSPrimitives(aVal, bVal);
+        }
+        case rt.Float_TAG.value:
+          return compareJSPrimitives(rt.Float_getValue(a), rt.Float_getValue(b));
+        case rt.TypeLink_TAG.value:
+          return rt.compareIds(rt.TypeLink_getId(a), rt.TypeLink_getId(b));
+        case rt.TermLink_TAG.value: {
+          let idComparison = rt.compareIds(rt.TermLink_getId(a), rt.TermLink_getId(b));
+          if (idComparison !== 0) return idComparison;
+          return compareJSPrimitives(rt.TermLink_getConstructor(a), rt.TermLink_getConstructor(b));
+        }
+        case rt.Char_TAG.value:
+          return compareJSPrimitives(rt.Char_getValue(a), rt.Char_getValue(b));
+        case rt.Text_TAG.value:
+          return compareJSPrimitives(rt.Text_getValue(a), rt.Text_getValue(b));
+        case rt.Data_TAG.value: {
+          let typeComparison = rt.compareIds(rt.Data_getType(a), rt.Data_getType(b));
+          if (typeComparison !== 0) return typeComparison;
+          let constructorComparison = compareJSPrimitives(rt.Data_getConstructor(a), rt.Data_getConstructor(b));
+          if (constructorComparison !== 0) return constructorComparison;
+          return compareArgs(rt, rt.Data_getArgs(a), rt.Data_getArgs(b));
+        }
+        case rt.Request_TAG.value: {
+          let dataComparison = compare(rt, rt.Request_getData(a), rt.Request_getData(b));
+          if (dataComparison !== 0) return dataComparison;
+          return compare(rt, rt.Request_getContinue(a), rt.Request_getContinue(b));
+        }
+        case rt.Function_TAG.value:
+        case rt.Closure_TAG.value: {
+          let idComparison = rt.compareIds(rt.Function_getId(a), rt.Function_getId(b));
+          if (idComparison !== 0) return idComparison;
+          let aBound = aTag === rt.Closure_TAG.value ? rt.Closure_getBound(a) : null;
+          let bBound = bTag === rt.Closure_TAG.value ? rt.Closure_getBound(b) : null;
+          if (aBound === null && bBound == null) return 0;
+          if (aBound === null) return -1;
+          if (bBound === null) return 1;
+          return compareArgs(rt, aBound, bBound);
+        }
+        case rt.Continuation_TAG.value:
+          let dataComparison = compareArgs(rt, rt.Continuation_getData(a), rt.Continuation_getData(b));
+          if (dataComparison !== 0) return dataComparison;
+          if (rt.Continuation_getImpl(a) === rt.Continuation_getImpl(b)) return 0;
+          rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unable to compare different continuations with the same carried data'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+        case rt.Quote_TAG.value:
+          return compare(rt, rt.Quote_getValue(a), rt.Quote_getValue(b));
+        case rt.Code_TAG.value:
+          return compare(rt, rt.Code_getValue(a), rt.Code_getValue(b));
+        case rt.Foreign_TAG.value: {
+          let valueA = rt.Foreign_getValue(a);
+          let valueB = rt.Foreign_getValue(b);
+          if (valueA === valueB) return 0;
+          if (typeof valueA === 'bigint' && typeof valueB === 'bigint') {
+            return compareJSPrimitives(valueA, valueB);
+          }
+          if (valueA instanceof rt.js.JSValue && valueB instanceof rt.js.JSValue) {
+            valueA = valueA.get();
+            valueB = valueB.get();
+            if (valueA === valueB) return 0;
+            if (typeof valueA === typeof valueB) {
+              switch (typeof valueA) {
+                case 'number':
+                case 'string':
+                case 'boolean':
+                case 'bigint':
+                case 'undefined':
+                  return compareJSPrimitives(valueA, valueB);
+                default:
+                  // fallthrough
+              }
+            }
+          }
+          rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unable to compare different foreign values'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+        }
+        case rt.Boolean_TAG.value:
+          return compareJSPrimitives(rt.Boolean_getValue(a), rt.Boolean_getValue(b));
+        case rt.Array_TAG.value:
+          return compareArgs(rt.Array_getContents(a), rt.Array_getContents(b));
+        case rt.ByteArray_TAG.value: {
+          let aView = rt.ByteArray_getContents(a);
+          let bView = rt.ByteArray_getContents(b);
+          let aBytes = new Uint8Array(aView.buffer, aView.byteOffset, aView.byteLength);
+          let bBytes = new Uint8Array(bView.buffer, bView.byteOffset, bView.byteLength);
+          for (let i = 0, len = Math.max(aBytes.byteLength, bBytes.byteLength); i < len; i++) {
+            let aByte = aBytes[i];
+            let bByte = bBytes[i];
+            if (aByte == null) return -1;
+            if (bByte == null) return 1;
+            if (aByte !== bByte) return aByte < bByte ? -1 : 1;
+          }
+          return 0;
+        }
+        case rt.Bytes_TAG.value: {
+          let aBytes = rt.Bytes_getValue(a).toUint8Array();
+          let bBytes = rt.Bytes_getValue(b).toUint8Array();
+          for (let i = 0, len = Math.max(aBytes.byteLength, bBytes.byteLength); i < len; i++) {
+            let aByte = aBytes[i];
+            let bByte = bBytes[i];
+            if (aByte == null) return -1;
+            if (bByte == null) return 1;
+            if (aByte !== bByte) return aByte < bByte ? -1 : 1;
+          }
+          return 0;
+        }
+        case rt.List_TAG.value: {
+          let aList = rt.List_getValue(a);
+          let bList = rt.List_getValue(b);
+          for (let i = 0, len = Math.max(aList.size, bList.size); i < len; i++) {
+            let aEl = aList.at(i);
+            let bEl = bList.at(i);
+            if (aEl == null) return -1;
+            if (bEl == null) return 1;
+            let cmp = compare(rt, aEl, bEl);
+            if (cmp !== 0) return cmp;
+          }
+          return 0;
+        }
+        default:
+          rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unknown value type for comparison'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+      }
+    }
+    return (rt, a, b) => rt.Int(BigInt(compare(rt, a, b)));
+  })()
+  """
+
+internal.runtime.replacements :
+  BuildConfig ->{IO, Exception} Map Reference Replacement
+internal.runtime.replacements config =
+  use Reference Builtin
+  reflectionSupport = BuildConfig.reflectionSupport config
+  Map.fromList
+    [ (termReference JS.ref, Scope_ref)
+    , (termReference JS.randomBytes, JS_randomBytes)
+    , (termReference JSValue.any, JSValue_any)
+    , (termReference JSValue.array, JSValue_array)
+    , (termReference arrayBuffer, JSValue_arrayBuffer)
+    , (termReference asAny, JSValue_asAny)
+    , (termReference asBoolean, JSValue_asBoolean)
+    , (termReference JSValue.asBytes, JSValue_asBytes)
+    , (termReference asFloat, JSValue_asFloat)
+    , (termReference asInt, JSValue_asInt)
+    , (termReference JSValue.asList, JSValue_asList)
+    , (termReference asNat, JSValue_asNat)
+    , (termReference assign, JSValue_assign)
+    , (termReference asText, JSValue_asText)
+    , (termReference bigint, JSValue_bigint)
+    , (termReference biguint, JSValue_biguint)
+    , (termReference JSValue.boolean, JSValue_boolean)
+    , (termReference JSValue.call, JSValue_call)
+    , (termReference function, JSValue_function)
+    , (termReference JSValue.global, JSValue_global)
+    , (termReference JSValue.getProperty, JSValue_getProperty)
+    , (termReference JSValue.setProperty, JSValue_setProperty)
+    , (termReference JSValue.setPropertyText, JSValue_setPropertyText)
+    , (termReference JSValue.invoke0, JSValue_invoke0)
+    , (termReference JSValue.invoke0_, JSValue_invoke0_)
+    , (termReference JSValue.invoke1_, JSValue_invoke1_)
+    , (termReference JSValue.invokeText1, JSValue_invokeText1)
+    , (termReference JSValue.invokeText1_, JSValue_invokeText1_)
+    , (termReference JSValue.invokeText2, JSValue_invokeText2)
+    , (termReference JSValue.invokeText2_, JSValue_invokeText2_)
+    , (termReference JSValue.invokeText3_, JSValue_invokeText3_)
+    , (termReference JSValue.invokeTextVal_, JSValue_invokeTextVal_)
+    , (termReference JSValue.callback1_, JSValue_callback1_)
+    , (termReference JSValue.isNull, JSValue_isNull)
+    , (termReference isUndefined, JSValue_isUndefined)
+    , (termReference JSValue.new, JSValue_new)
+    , (termReference JSValue.null, JSValue_null)
+    , (termReference JSValue.number, JSValue_number)
+    , (termReference JSValue.object, JSValue_object)
+    , (termReference property, JSValue_property)
+    , (termReference string, JSValue_string)
+    , (termReference undefined, JSValue_undefined)
+    , (termReference fromBuiltin, Value_fromBuiltin)
+    , (termReference toBuiltin, Value_toBuiltin)
+    , (termReference CacheCode.fromCode, CacheCode_fromCode)
+    , (termReference CacheCode.toCode, CacheCode_toCode)
+    , ( termReference lookupArity
+      , includeIf
+          (requiresTermReferences reflectionSupport)
+          build_jit_lookupArity
+      )
+    , ( termReference instantiateModule
+      , includeIf
+          (requiresTermReferences reflectionSupport)
+          build_jit_instantiateModule
+      )
+    , ( termReference JS.catchRuntimeErrors
+      , JS_catchRuntimeErrors
+      )
+    , ( termReference Async.catchRuntimeErrors
+      , Async_catchRuntimeErrors
+      )
+    , (Builtin "Any.Any", Any_Any)
+    , (Builtin "Any.unsafeExtract", Any_unsafeExtract)
+    , (Builtin "Boolean.and", Boolean_and)
+    , (Builtin "Boolean.not", Boolean_not)
+    , (Builtin "Boolean.or", Boolean_or)
+    , (Builtin "bug", panicWithLabel "builtin.bug")
+    , (Builtin "Bytes.++", Bytes_append)
+    , (Builtin "Bytes.at", Bytes_at)
+    , (Builtin "Bytes.decodeNat16be", Bytes_decodeNat16be)
+    , (Builtin "Bytes.decodeNat16le", Bytes_decodeNat16le)
+    , (Builtin "Bytes.decodeNat32be", Bytes_decodeNat32be)
+    , (Builtin "Bytes.decodeNat32le", Bytes_decodeNat32le)
+    , (Builtin "Bytes.decodeNat64be", Bytes_decodeNat64be)
+    , (Builtin "Bytes.decodeNat64le", Bytes_decodeNat64le)
+    , (Builtin "Bytes.drop", Bytes_drop)
+    , (Builtin "Bytes.empty", Bytes_empty)
+    , (Builtin "Bytes.encodeNat16be", Bytes_encodeNat16be)
+    , (Builtin "Bytes.encodeNat16le", Bytes_encodeNat16le)
+    , (Builtin "Bytes.encodeNat32be", Bytes_encodeNat32be)
+    , (Builtin "Bytes.encodeNat32le", Bytes_encodeNat32le)
+    , (Builtin "Bytes.encodeNat64be", Bytes_encodeNat64be)
+    , (Builtin "Bytes.encodeNat64le", Bytes_encodeNat64le)
+    , (Builtin "Bytes.flatten", Bytes_flatten)
+    , (Builtin "Bytes.fromBase16", Bytes_fromBase16)
+    , (Builtin "Bytes.fromBase32", Bytes_fromBase32)
+    , (Builtin "Bytes.fromBase64", Bytes_fromBase64)
+    , ( Builtin "Bytes.fromBase64UrlUnpadded"
+      , Bytes_fromBase64UrlUnpadded
+      )
+    , (Builtin "Bytes.fromList", Bytes_fromList)
+    , (Builtin "Bytes.indexOf", Bytes_indexOf)
+    , (Builtin "Bytes.size", Bytes_size)
+    , (Builtin "Bytes.take", Bytes_take)
+    , (Builtin "Bytes.toBase16", Bytes_toBase16)
+    , (Builtin "Bytes.toBase32", Bytes_toBase32)
+    , (Builtin "Bytes.toBase64", Bytes_toBase64)
+    , ( Builtin "Bytes.toBase64UrlUnpadded"
+      , Bytes_toBase64UrlUnpadded
+      )
+    , (Builtin "Bytes.toList", Bytes_toList)
+    , ( Builtin "Char.Class.alphanumeric"
+      , Char_Class_alphanumeric
+      )
+    , (Builtin "Char.Class.and", Char_Class_and)
+    , (Builtin "Char.Class.any", Char_Class_any)
+    , (Builtin "Char.Class.anyOf", Char_Class_anyOf)
+    , (Builtin "Char.Class.control", Char_Class_control)
+    , (Builtin "Char.Class.is", Char_Class_is)
+    , (Builtin "Char.Class.letter", Char_Class_letter)
+    , (Builtin "Char.Class.lower", Char_Class_lower)
+    , (Builtin "Char.Class.mark", Char_Class_mark)
+    , (Builtin "Char.Class.not", Char_Class_not)
+    , (Builtin "Char.Class.number", Char_Class_number)
+    , (Builtin "Char.Class.or", Char_Class_or)
+    , (Builtin "Char.Class.printable", Char_Class_printable)
+    , ( Builtin "Char.Class.punctuation"
+      , Char_Class_punctuation
+      )
+    , (Builtin "Char.Class.range", Char_Class_range)
+    , (Builtin "Char.Class.separator", Char_Class_separator)
+    , (Builtin "Char.Class.symbol", Char_Class_symbol)
+    , (Builtin "Char.Class.upper", Char_Class_upper)
+    , (Builtin "Char.Class.whitespace", Char_Class_whitespace)
+    , (Builtin "Char.fromNat", Char_fromNat)
+    , (Builtin "Char.toNat", Char_toNat)
+    , (Builtin "Char.toText", Char_toText)
+    , ( Builtin "Code.cache_"
+      , Unimplemented "Reflection needs some design work"
+      )
+    , ( Builtin "Code.dependencies"
+      , Unimplemented "Reflection needs some design work"
+      )
+    , ( Builtin "Code.deserialize"
+      , includeIf
+          (requiresSerialization reflectionSupport)
+          Code_deserialize
+      )
+    , ( Builtin "Code.display"
+      , Unimplemented "Reflection needs some design work"
+      )
+    , ( Builtin "Code.isMissing"
+      , includeIf
+          (requiresTermReferences reflectionSupport)
+          Code_isMissing
+      )
+    , ( Builtin "Code.lookup"
+      , Unimplemented "Reflection needs some design work"
+      )
+    , ( Builtin "Code.serialize"
+      , Unimplemented "Reflection needs some design work"
+      )
+    , ( Builtin "Code.validate"
+      , Unimplemented "Reflection needs some design work"
+      )
+    , ( Builtin "Code.validateLinks"
+      , Unimplemented "Reflection needs some design work"
+      )
+    , (Builtin "Debug.toText", Debug_toText)
+    , (Builtin "Debug.trace", Debug_trace)
+    , (Builtin "Debug.watch", Debug_watch)
+    , (Builtin "Float.-", Float_minus)
+    , (Builtin "Float.!=", Float_ne)
+    , (Builtin "Float.*", Float_times)
+    , (Builtin "Float./", Float_div)
+    , (Builtin "Float.+", Float_plus)
+    , (Builtin "Float.<", Float_lt)
+    , (Builtin "Float.<=", Float_lte)
+    , (Builtin "Float.==", Float_eq)
+    , (Builtin "Float.>", Float_gt)
+    , (Builtin "Float.>=", Float_gte)
+    , (Builtin "Float.abs", Float_abs)
+    , (Builtin "Float.acos", Float_acos)
+    , (Builtin "Float.acosh", Float_acosh)
+    , (Builtin "Float.asin", Float_asin)
+    , (Builtin "Float.asinh", Float_asinh)
+    , (Builtin "Float.atan", Float_atan)
+    , (Builtin "Float.atan2", Float_atan2)
+    , (Builtin "Float.atanh", Float_atanh)
+    , (Builtin "Float.ceiling", Float_ceiling)
+    , (Builtin "Float.cos", Float_cos)
+    , (Builtin "Float.cosh", Float_cosh)
+    , (Builtin "Float.exp", Float_exp)
+    , (Builtin "Float.floor", Float_floor)
+    , ( Builtin "Float.fromRepresentation"
+      , Float_fromRepresentation
+      )
+    , (Builtin "Float.fromText", Float_fromText)
+    , (Builtin "Float.log", Float_log)
+    , (Builtin "Float.logBase", Float_logBase)
+    , (Builtin "Float.max", Float_max)
+    , (Builtin "Float.min", Float_min)
+    , (Builtin "Float.pow", Float_pow)
+    , (Builtin "Float.round", Float_round)
+    , (Builtin "Float.sin", Float_sin)
+    , (Builtin "Float.sinh", Float_sinh)
+    , (Builtin "Float.sqrt", Float_sqrt)
+    , (Builtin "Float.tan", Float_tan)
+    , (Builtin "Float.tanh", Float_tanh)
+    , ( Builtin "Float.toRepresentation"
+      , Float_toRepresentation
+      )
+    , (Builtin "Float.toText", Float_toText)
+    , (Builtin "Float.truncate", Float_truncate)
+    , (Builtin "ImmutableArray.copyTo!", RawArray_copyTo!)
+    , (Builtin "ImmutableArray.read", RawArray_read)
+    , (Builtin "ImmutableArray.size", RawArray_size)
+    , ( Builtin "ImmutableByteArray.copyTo!"
+      , RawByteArray_copyTo!
+      )
+    , ( Builtin "ImmutableByteArray.fromBytes"
+      , RawByteArray_fromBytes
+      )
+    , ( Builtin "ImmutableByteArray.read16be"
+      , RawByteArray_read16be
+      )
+    , ( Builtin "ImmutableByteArray.read24be"
+      , RawByteArray_read24be
+      )
+    , ( Builtin "ImmutableByteArray.read32be"
+      , RawByteArray_read32be
+      )
+    , ( Builtin "ImmutableByteArray.read40be"
+      , RawByteArray_read40be
+      )
+    , ( Builtin "ImmutableByteArray.read64be"
+      , RawByteArray_read64be
+      )
+    , (Builtin "ImmutableByteArray.read8", RawByteArray_read8)
+    , (Builtin "ImmutableByteArray.size", RawByteArray_size)
+    , ( Builtin "ImmutableByteArray.toBytes"
+      , RawByteArray_toBytes
+      )
+    , (Builtin "Int.-", Int_minus)
+    , (Builtin "Int.*", Int_times)
+    , (Builtin "Int./", Int_div)
+    , (Builtin "Int.+", Int_plus)
+    , (Builtin "Int.<", Int_lt)
+    , (Builtin "Int.<=", Int_lte)
+    , (Builtin "Int.==", Int_eq)
+    , (Builtin "Int.>", Int_gt)
+    , (Builtin "Int.>=", Int_gte)
+    , (Builtin "Int.and", Int_and)
+    , (Builtin "Int.complement", Int_complement)
+    , ( Builtin "Int.fromRepresentation"
+      , Int_fromRepresentation
+      )
+    , (Builtin "Int.fromText", Int_fromText)
+    , (Builtin "Int.increment", Int_increment)
+    , (Builtin "Int.isEven", Int_isEven)
+    , (Builtin "Int.isOdd", Int_isOdd)
+    , (Builtin "Int.leadingZeros", Int_leadingZeroes)
+    , (Builtin "Int.mod", Int_mod)
+    , (Builtin "Int.negate", Int_negate)
+    , (Builtin "Int.or", Int_or)
+    , (Builtin "Int.popCount", Int_popCount)
+    , (Builtin "Int.pow", Int_pow)
+    , (Builtin "Int.shiftLeft", Int_shiftLeft)
+    , (Builtin "Int.shiftRight", Int_shiftRight)
+    , (Builtin "Int.signum", Int_signum)
+    , (Builtin "Int.toFloat", Int_toFloat)
+    , (Builtin "Int.toRepresentation", Int_toRepresentation)
+    , (Builtin "Int.toText", Int_toText)
+    , (Builtin "Int.trailingZeros", Int_trailingZeroes)
+    , (Builtin "Int.truncate0", Int_truncate0)
+    , (Builtin "Int.xor", Int_xor)
+    , (Builtin "Integer.fromText", Integer_fromText)
+    , ( Builtin "Integer.unsafeFromText"
+      , Integer_unsafeFromText
+      )
+    , (Builtin "Integer.toText", Integer_toText)
+    , (Builtin "Integer.fromInt", Integer_fromInt)
+    , (Builtin "Integer.toInt", Integer_toInt)
+    , (Builtin "Integer.add", Integer_add)
+    , (Builtin "Integer.sub", Integer_sub)
+    , (Builtin "Integer.mul", Integer_mul)
+    , (Builtin "Integer.div", Integer_div)
+    , (Builtin "Integer.mod", Integer_mod)
+    , (Builtin "Integer.pow", Integer_pow)
+    , (Builtin "Integer.shiftLeft", Integer_shiftLeft)
+    , (Builtin "Integer.shiftRight", Integer_shiftRight)
+    , (Builtin "Integer.and", Integer_and)
+    , (Builtin "Integer.or", Integer_or)
+    , (Builtin "Integer.xor", Integer_xor)
+    , (Builtin "Integer.popCount", Integer_popCount)
+    , (Builtin "Integer.eq", Integer_eq)
+    , (Builtin "Integer.lt", Integer_lt)
+    , (Builtin "Integer.lteq", Integer_lteq)
+    , (Builtin "Integer.gt", Integer_gt)
+    , (Builtin "Integer.gteq", Integer_gteq)
+    , (Builtin "Integer.neg", Integer_neg)
+    , (Builtin "Integer.abs", Integer_abs)
+    , (Builtin "Integer.signum", Integer_signum)
+    , (Builtin "Integer.toFloat", Integer_toFloat)
+    , (Builtin "Integer.isEven", Integer_isEven)
+    , (Builtin "Integer.isOdd", Integer_isOdd)
+    , (Builtin "jumpCont", jumpCont)
+    , (Builtin "Link.Term.toText", Link_Term_toText)
+    , (Builtin "List.++", List_append)
+    , (Builtin "List.at", List_at)
+    , (Builtin "List.cons", List_cons)
+    , (Builtin "List.drop", List_drop)
+    , (Builtin "List.empty", List_empty)
+    , (Builtin "List.size", List_size)
+    , (Builtin "List.snoc", List_snoc)
+    , (Builtin "List.take", List_take)
+    , (Builtin "List.viewl", List_viewl)
+    , (Builtin "List.viewr", List_viewr)
+    , (Builtin "MutableArray.copyTo!", RawArray_copyTo!)
+    , (Builtin "MutableArray.freeze!", RawArray_freeze!)
+    , (Builtin "MutableArray.freeze", RawArray_freeze)
+    , (Builtin "MutableArray.read", RawArray_read)
+    , (Builtin "MutableArray.size", RawArray_size)
+    , (Builtin "MutableArray.write", RawArray_write)
+    , ( Builtin "MutableByteArray.copyTo!"
+      , RawByteArray_copyTo!
+      )
+    , ( Builtin "MutableByteArray.freeze!"
+      , RawByteArray_freeze!
+      )
+    , (Builtin "MutableByteArray.freeze", RawByteArray_freeze)
+    , ( Builtin "MutableByteArray.read16be"
+      , RawByteArray_read16be
+      )
+    , ( Builtin "MutableByteArray.read24be"
+      , RawByteArray_read24be
+      )
+    , ( Builtin "MutableByteArray.read32be"
+      , RawByteArray_read32be
+      )
+    , ( Builtin "MutableByteArray.read40be"
+      , RawByteArray_read40be
+      )
+    , ( Builtin "MutableByteArray.read64be"
+      , RawByteArray_read64be
+      )
+    , (Builtin "MutableByteArray.read8", RawByteArray_read8)
+    , (Builtin "MutableByteArray.size", RawByteArray_size)
+    , ( Builtin "MutableByteArray.write16be"
+      , RawByteArray_write16be
+      )
+    , ( Builtin "MutableByteArray.write32be"
+      , RawByteArray_write32be
+      )
+    , ( Builtin "MutableByteArray.write64be"
+      , RawByteArray_write64be
+      )
+    , (Builtin "MutableByteArray.write8", RawByteArray_write8)
+    , (Builtin "Nat.*", Nat_times)
+    , (Builtin "Nat./", Nat_div)
+    , (Builtin "Nat.+", Nat_plus)
+    , (Builtin "Nat.<", Nat_lt)
+    , (Builtin "Nat.<=", Nat_lte)
+    , (Builtin "Nat.==", Nat_eq)
+    , (Builtin "Nat.>", Nat_gt)
+    , (Builtin "Nat.>=", Nat_gte)
+    , (Builtin "Nat.and", Nat_and)
+    , (Builtin "Nat.complement", Nat_complement)
+    , (Builtin "Nat.drop", Nat_drop)
+    , (Builtin "Nat.fromText", Nat_fromText)
+    , (Builtin "Nat.increment", Nat_increment)
+    , (Builtin "Nat.isEven", Nat_isEven)
+    , (Builtin "Nat.isOdd", Nat_isOdd)
+    , (Builtin "Nat.leadingZeros", Nat_leadingZeroes)
+    , (Builtin "Nat.mod", Nat_mod)
+    , (Builtin "Nat.or", Nat_or)
+    , (Builtin "Nat.popCount", Nat_popCount)
+    , (Builtin "Nat.pow", Nat_pow)
+    , (Builtin "Nat.shiftLeft", Nat_shiftLeft)
+    , (Builtin "Nat.shiftRight", Nat_shiftRight)
+    , (Builtin "Nat.sub", Nat_sub)
+    , (Builtin "Nat.toFloat", Nat_toFloat)
+    , (Builtin "Nat.toInt", Int_fromRepresentation)
+    , (Builtin "Nat.toText", Nat_toText)
+    , (Builtin "Nat.trailingZeros", Nat_trailingZeroes)
+    , (Builtin "Nat.xor", Nat_xor)
+    , (Builtin "Natural.fromText", Natural_fromText)
+    , ( Builtin "Natural.unsafeFromText"
+      , Natural_unsafeFromText
+      )
+    , (Builtin "Natural.toText", Integer_toText)
+    , (Builtin "Natural.fromNat", Natural_fromNat)
+    , (Builtin "Natural.toNat", Natural_toNat)
+    , (Builtin "Natural.add", Integer_add)
+    , (Builtin "Natural.sub", Natural_sub)
+    , (Builtin "Natural.mul", Integer_mul)
+    , (Builtin "Natural.div", Integer_div)
+    , (Builtin "Natural.mod", Integer_mod)
+    , (Builtin "Natural.pow", Integer_pow)
+    , (Builtin "Natural.shiftLeft", Integer_shiftLeft)
+    , (Builtin "Natural.shiftRight", Integer_shiftRight)
+    , (Builtin "Natural.and", Integer_and)
+    , (Builtin "Natural.or", Integer_or)
+    , (Builtin "Natural.xor", Integer_xor)
+    , (Builtin "Natural.popCount", Integer_popCount)
+    , (Builtin "Natural.eq", Integer_eq)
+    , (Builtin "Natural.lt", Integer_lt)
+    , (Builtin "Natural.lteq", Integer_lteq)
+    , (Builtin "Natural.gt", Integer_gt)
+    , (Builtin "Natural.gteq", Integer_gteq)
+    , (Builtin "Natural.toFloat", Integer_toFloat)
+    , (Builtin "Natural.isEven", Natural_isEven)
+    , (Builtin "Natural.isOdd", Natural_isOdd)
+    , (Builtin "Pattern.capture", Pattern_capture)
+    , (Builtin "Pattern.captureAs", Pattern_captureAs)
+    , (Builtin "Pattern.isMatch", Pattern_isMatch)
+    , (Builtin "Pattern.join", Pattern_join)
+    , (Builtin "Pattern.lookahead", Pattern_lookahead)
+    , (Builtin "Pattern.many.corrected", Pattern_many)
+    , ( Builtin "Pattern.many"
+      , Unimplemented
+          "Your code relies on a broken version of `Pattern.many` (you probably need to upgrade `@unison/base`)"
+      )
+    , ( Builtin "Pattern.negativeLookahead"
+      , Pattern_negativeLookahead
+      )
+    , (Builtin "Pattern.or", Pattern_or)
+    , (Builtin "Pattern.replicate", Pattern_replicate)
+    , (Builtin "Pattern.run", Pattern_run)
+    , (Builtin "Ref.read", Ref_read)
+    , (Builtin "Ref.write", Ref_write)
+    , (Builtin "Scope.array", Scope_array)
+    , (Builtin "Scope.arrayOf", Scope_arrayOf)
+    , (Builtin "Scope.bytearray", Scope_bytearray)
+    , (Builtin "Scope.bytearrayOf", Scope_bytearrayOf)
+    , (Builtin "Scope.ref", Scope_ref)
+    , (Builtin "Scope.run", Scope_run)
+    , (Builtin "Text.!=", Text_ne)
+    , (Builtin "Text.++", Text_concat)
+    , (Builtin "Text.<", Text_lt)
+    , (Builtin "Text.<=", Text_lte)
+    , (Builtin "Text.==", Text_eq)
+    , (Builtin "Text.>", Text_gt)
+    , (Builtin "Text.>=", Text_gte)
+    , (Builtin "Text.drop", Text_drop)
+    , (Builtin "Text.empty", Text_empty)
+    , (Builtin "Text.fromCharList", Text_fromCharList)
+    , (Builtin "Text.fromUtf8.impl.v3", Text_fromUtf8_impl_v3)
+    , (Builtin "Text.indexOf", Text_indexOf)
+    , (Builtin "Text.patterns.anyChar", Text_patterns_anyChar)
+    , (Builtin "Text.patterns.char", Text_patterns_char)
+    , (Builtin "Text.patterns.charIn", Text_patterns_charIn)
+    , ( Builtin "Text.patterns.charRange"
+      , Text_patterns_charRange
+      )
+    , (Builtin "Text.patterns.digit", Text_patterns_digit)
+    , (Builtin "Text.patterns.eof", Text_patterns_eof)
+    , (Builtin "Text.patterns.letter", Text_patterns_letter)
+    , (Builtin "Text.patterns.literal", Text_patterns_literal)
+    , ( Builtin "Text.patterns.lookbehind"
+      , Text_patterns_lookbehind
+      )
+    , ( Builtin "Text.patterns.negativeLookbehind"
+      , Text_patterns_negativeLookbehind
+      )
+    , ( Builtin "Text.patterns.notCharIn"
+      , Text_patterns_notCharIn
+      )
+    , ( Builtin "Text.patterns.notCharRange"
+      , Text_patterns_notCharRange
+      )
+    , ( Builtin "Text.patterns.punctuation"
+      , Text_patterns_punctuation
+      )
+    , (Builtin "Text.patterns.space", Text_patterns_space)
+    , (Builtin "Text.repeat", Text_repeat)
+    , (Builtin "Text.reverse", Text_reverse)
+    , (Builtin "Text.size", Text_size)
+    , (Builtin "Text.take", Text_take)
+    , (Builtin "Text.toCharList", Text_toCharList)
+    , (Builtin "Text.toLowercase", Text_toLowercase)
+    , (Builtin "Text.toUppercase", Text_toUppercase)
+    , (Builtin "Text.toUtf8", Text_toUtf8)
+    , (Builtin "Text.uncons", Text_uncons)
+    , (Builtin "Text.unsnoc", Text_unsnoc)
+    , (Builtin "todo", panicWithLabel "builtin.todo")
+    , (Builtin "Universal.<", Universal_lt)
+    , (Builtin "Universal.<=", Universal_lte)
+    , (Builtin "Universal.==", Universal_eq)
+    , (Builtin "Universal.>", Universal_gt)
+    , (Builtin "Universal.>=", Universal_gte)
+    , (Builtin "Universal.compare", Universal_compare)
+    , ( Builtin "unsafe.coerceAbilities"
+      , unsafe_coerceAbilities
+      )
+    , ( Builtin "Value.dependencies"
+      , includeIf
+          (requiresSerialization reflectionSupport)
+          Value_dependencies
+      )
+    , ( Builtin "Value.deserialize"
+      , includeIf
+          (requiresSerialization reflectionSupport)
+          Value_deserialize
+      )
+    , ( Builtin "Value.load"
+      , includeIf
+          (requiresSerialization reflectionSupport) Value_load
+      )
+    , ( Builtin "Value.serialize"
+      , includeIf
+          (requiresSerialization reflectionSupport)
+          Value_serialize
+      )
+    , ( Builtin "Value.value"
+      , includeIf
+          (requiresSerialization reflectionSupport)
+          Value_value
+      )
+    ]
+
+tests.builtins : [WasmTest]
+tests.builtins =
+  List.map
+    (WasmTest.group "builtins")
+    [ universal
+    , builtins.list
+    , builtins.nat
+    , builtins.int
+    , builtins.float
+    , builtins.natural
+    , integer
+    , builtins.bytes
+    , builtins.char
+    , builtins.text
+    , builtins.pattern
+    , charClass
+    , textPatterns
+    , immutableByteArray
+    , mutableByteArray
+    , immutableArray
+    , mutableArray
+    ]
+
+ReleaseNotes : Doc
+ReleaseNotes =
+  {{
+  * Further hardened {Universal.compare} against edge cases in bare function
+    and closure comparison.
+  * 2026-10-30: JS builtins can take their arguments unboxed and box their
+    results in wasm ({internal.Replacement.jsUnboxed}), so the JS function
+    makes no calls back into wasm. The `JSValue` interop functions
+    (`invoke*`, `getProperty`, `setProperty*`, `callback1_`), `Nat.toText`
+    and `Text.indexOf` use it. A UI creating 1,000 table rows crossed the
+    wasm–JS boundary 197,231 times before and 32,046 after.
+  * 2026-10-30: `Universal.==` compares a plain function with a closure by
+    id in wasm instead of in JS.
+  * 2026-10-30: `Universal.compare`, `Universal.==` and the builtins with a
+    `Boolean` result return shared result boxes
+    ({internal.Replacement.sharedValues}) instead of allocating one per call.
+  * 2026-10-30: `Text.size`, `Text.take` and `Text.drop` run in wasm over the
+    `wasm:js-string` builtins (`length`, `substring`), with no call into JS.
+  * 2026-10-30: `Char.toText`, `Char.toNat`, `Char.fromNat`, `Text.uncons` and
+    `Text.unsnoc` also run in wasm over `wasm:js-string`.
+  * 2026-10-28: `Universal.compare` and `Universal.==` compare values of the
+    same kind in wasm ({Universal_compare.defineCompareValues},
+    {Universal_eq.defineEqValues}), and fall back to JS for the rest.
+  * 2026-10-29: `List` is a balanced tree of 32-element arrays in wasm
+    instead of a JS finger tree, with a differential test of 9,000 random
+    list operations against the native runtime (`tests.builtins.listFuzz`).
+  * 2026-10-29: `JSValue.getProperty`, `setProperty`, `setPropertyText`,
+    `invoke0`, `invoke0_`, `invoke1_`, `invokeText1`, `invokeText1_`,
+    `invokeText2`, `invokeText2_`, `invokeText3_`, `invokeTextVal_` and
+    `callback1_` call a JS method or property in one step.
+  }}

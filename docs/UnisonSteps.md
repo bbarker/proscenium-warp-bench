@@ -247,6 +247,41 @@ The js-framework-benchmark app is on `perf-r7` too (`bench.jfb`):
 Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` for each, and
 `node bench/frontend-wasm/totext.mjs warp/totext-bare-r5i warp/totext-bare-r7 warp/totext-bare-r7u warp/totext-bare-r7w`.
 
+- [ ] All of warp's changes, rebased onto warp 1.4.2, the current release on Share
+      (`@dfreeman/warp/perf-r7-142`).
+  - Our scratch files replace 104 definitions, and four of them changed between 1.3.0 and
+    1.4.2: the builtin map, `Universal_compare`, `tests.builtins` and `ReleaseNotes`.
+  - `unison/scratch/warp--perf-r7-142.u` holds those four merged:
+    - the map is 1.4.2's plus round 4's 13 interop entries;
+    - `Universal_compare.jsSource` is 1.4.2's JS, now the fallback of the wasm
+      comparison;
+    - the test list is 1.4.2's plus `builtins.list`;
+    - the release notes are 1.4.2's line plus ours.
+  - Everything else is replayed as it was. warp's tests and the list fuzz test pass, and
+    so do the rows, meals and cards checks on Proscenium `perf-r7-142`.
+
+```ucm
+@dfreeman/warp/perf-r7> clone @dfreeman/warp/releases/1.4.2
+@dfreeman/warp/releases/1.4.2> branch /perf-r7-142
+@dfreeman/warp/perf-r7-142> load unison/scratch/warp--perf.u
+@dfreeman/warp/perf-r7-142> update
+@dfreeman/warp/perf-r7-142> load target/unison/frontend-bench/scratch-warp--perf-list.u
+@dfreeman/warp/perf-r7-142> update
+@dfreeman/warp/perf-r7-142> load target/unison/frontend-bench/scratch-warp--perf-js.u
+@dfreeman/warp/perf-r7-142> update
+@dfreeman/warp/perf-r7-142> load unison/scratch/warp--perf-r4.u
+@dfreeman/warp/perf-r7-142> update
+@dfreeman/warp/perf-r7-142> load unison/scratch/warp--perf-r7.u
+@dfreeman/warp/perf-r7-142> update
+@dfreeman/warp/perf-r7-142> load unison/scratch/warp--perf-r7-142.u
+@dfreeman/warp/perf-r7-142> update
+@dfreeman/warp/perf-r7-142> run tests
+@dfreeman/warp/perf-r7-142> run tests.builtins.listFuzz.suite
+@dfreeman/proscenium/perf-r7> branch /perf-r7-142
+@dfreeman/proscenium/perf-r7-142> fork @dfreeman/warp/perf-r7-142: lib.dfreeman_warp_r7_142
+@dfreeman/proscenium/perf-r7-142> upgrade dfreeman_warp_r7e dfreeman_warp_r7_142
+```
+
 - [ ] The same app for stock Proscenium (`bench.jfbstock`, plain `useState` and a region
       per row), on a branch of `bench`:
 

@@ -133,10 +133,15 @@ paid off for `compare`, `==` and `List`.
 | Proscenium `perf-fine` … `perf-r5` | key hints as data, `elementWith`, `Keyed`, `Selector`, DOM sync bottom-up | If ink stays; `Keyed` and `Selector` either way |
 | Proscenium `perf-r7`, `bench-jfb` | the benchmark apps, including `bench.jfb` and `bench.jfbstock` for js-framework-benchmark | Bench code only |
 
-All the warp branches are against 1.3.0. Share has 1.4.2, whose `Universal.compare`
-tightened the function and closure cases. So moving our wasm `compare` and `==` onto it
-means taking 1.4.2's JS as their fallback and matching its ordering, not just
-re-applying the change.
+The branches above are against 1.3.0. **`@dfreeman/warp/perf-r7-142` is all of the warp
+work worth taking, rebased onto 1.4.2.**
+- **The merge:** four of the definitions we replace changed upstream, and are merged in
+  `unison/scratch/warp--perf-r7-142.u`. Your hardened `Universal.compare` is kept as the
+  JS fallback, and wasm handles only two values of the same kind, so the ordering of a
+  function against a closure is yours.
+- **Tests:** your tests (with 1.4.2's `Integer` and `Natural` ones) and our list fuzz
+  test pass.
+- **Proscenium:** `perf-r7-142` on it matches Leptos and round 5, and times the same.
 
 ## Design notes, not built
 

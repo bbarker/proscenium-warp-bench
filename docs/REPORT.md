@@ -1563,6 +1563,29 @@ What it shows:
   is the work of "A tree of Proscenium's own" (`docs/ProsceniumTree.md`) and of warp's
   continuation handling, below.
 
+#### Closed-world mode on a narrower boundary
+
+The author expected closed-world wasm-opt to do much more once fewer types cross into JS.
+Measured on round 7's rows module:
+
+- **On the full boundary,** closed-world mode makes almost no difference: 142,980 bytes
+  against 143,255 without it.
+- **The module has 193 exports,** a constructor and getters for every kind of value.
+  JS calls only 15 of them in any of the three suites, plus `main` and what the loader
+  reads at start.
+- **With the other 170 stripped** from a copy (`rows-bare-r7x`), closed-world mode drops
+  50 of 202 types and 87 of 840 functions. The module shrinks to 142,298 bytes, 2.6%
+  smaller under brotli, and the rows table still matches Leptos.
+- **The runtime does not change** beyond noise (`results/round7-closed-world-rows.json`,
+  10 interleaved runs).
+
+The boundary was not what held wasm-opt back. Values live boxed in generic `Values`
+arrays, and functions are called through `call_ref` and `apply*`. No whole-program
+analysis can unbox a value stored in an array of `Value`, or inline a call through a
+closure it cannot see. The gains are in how code is compiled, as in "Measured
+attribution", rather than in what is exported. Shrinking the export list is still worth
+doing in warp for size, by exporting only what the loader uses.
+
 #### The meals search, behind a skip boundary
 
 Proscenium's `region` is a key, not a skip boundary: its body runs whenever its parent

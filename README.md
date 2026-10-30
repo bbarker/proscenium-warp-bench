@@ -80,6 +80,7 @@ clone of the upstream project named in the first row, and the report writes them
 | [`perf-r7`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7) | From `perf-r4`: JS interop, `Nat.toText` and `Text.indexOf` take unboxed arguments (`jsUnboxed`); `==` compares a function with a closure by id in wasm; `compare`, `==` and Boolean intrinsics return shared boxes; `Text.size`/`take`/`drop` over `wasm:js-string`. | round 7 |
 | [`perf-r7u`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7u) | `perf-r7` with `Nat.toText` written in Unison (an experiment: 8 times slower than unboxed JS). | round 7 |
 | [`perf-r7w`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7w) | `perf-r7` with `Nat.toText` in the instruction DSL (an experiment: 5 times slower than unboxed JS). | round 7 |
+| [`perf-r7-142`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7-142) | **All of the above that is worth taking, rebased onto warp 1.4.2:** rounds 1, 4 and 7, with 1.4.2's `Universal.compare` as the JS fallback. warp's tests and the list fuzz test pass. | round 7 |
 
 A note on 1.3.0: Proscenium 0.4.3, which the benchmark builds on, uses warp 1.3.0. The warp changes
 replace whole definitions as they were in 1.3.0, so apply them to a 1.3.0 clone and not to a newer
@@ -108,6 +109,7 @@ Each branch is built on the one before it, and carries the ink and warp versions
 | [`perf-r7`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7) | `perf-r5m` on warp `perf-r7`, + the js-framework-benchmark app (`bench.jfb`). | round 7 |
 | [`bench-jfb`](https://share.unison-lang.org/@nusentry/proscenium/code/bench-jfb) | `bench` + the js-framework-benchmark app for stock Proscenium (`bench.jfbstock`). | round 7 |
 | [`perf-r7u`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7u), [`perf-r7w`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7w) | `perf-r7` on warp `perf-r7u` and `perf-r7w`, for timing `Nat.toText` (`bench.totext`). | round 7 |
+| [`perf-r7-142`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7-142) | `perf-r7` on warp `perf-r7-142`. All apps match Leptos and round 5, and rows times the same as on 1.3.0. | round 7 |
 
 ## Reproducing
 

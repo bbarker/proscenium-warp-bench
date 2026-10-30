@@ -647,6 +647,8 @@ ReleaseNotes =
     ({internal.Replacement.sharedValues}) instead of allocating one per call.
   * 2026-10-30: `Text.size`, `Text.take` and `Text.drop` run in wasm over the
     `wasm:js-string` builtins (`length`, `substring`), with no call into JS.
+  * 2026-10-30: `Char.toText`, `Char.toNat`, `Char.fromNat`, `Text.uncons` and
+    `Text.unsnoc` also run in wasm over `wasm:js-string`.
   }}
 
 {{
@@ -715,6 +717,141 @@ internal.runtime.replacements.unison_base.Text_take = Text_take.textSlice true
 
 internal.runtime.replacements.unison_base.Text_drop : Replacement
 internal.runtime.replacements.unison_base.Text_drop = Text_take.textSlice false
+
+{{
+`Char.toText` for warp's output, in wasm: a `Char` holds its JS string, so this re-boxes the same string as `Text`, with no call into JS.
+}}
+internal.runtime.replacements.unison_base.Char_toText : Replacement
+internal.runtime.replacements.unison_base.Char_toText = wasmExpression 1 cases
+  runtime ->
+    cases
+      env, vars ->
+        pushTag VText
+        env' = pushUnboxedVar VChar env (List.unsafeAt 0 vars)
+        struct.new (Runtime.valueType VText runtime)
+        env'
+
+{{
+`Char.toNat` for warp's output, in wasm: the `wasm:js-string` `codePointAt` builtin at index 0, as the JS version's `codePointAt(0)`.
+}}
+internal.runtime.replacements.unison_base.Char_toNat : Replacement
+internal.runtime.replacements.unison_base.Char_toNat = wasmExpression 1 cases
+  runtime ->
+    use func *
+    codePointAt = import.func "wasm:js-string" "codePointAt" (param externref * param i32 => result i32)
+    cases
+      env, vars ->
+        pushTag VNat
+        env' = pushUnboxedVar VChar env (List.unsafeAt 0 vars)
+        i32.const 0
+        instr.call codePointAt
+        i64.extendI32U()
+        struct.new (Runtime.valueType VNat runtime)
+        env'
+
+{{
+`Char.fromNat` for warp's output, in wasm: the `wasm:js-string` `fromCodePoint` builtin. A number above `0x10FFFF` is passed as `0x110000` rather than wrapped to 32 bits, so it fails as JS's `String.fromCodePoint` does instead of naming a different character.
+}}
+internal.runtime.replacements.unison_base.Char_fromNat : Replacement
+internal.runtime.replacements.unison_base.Char_fromNat = wasmExpression 1 cases
+  runtime ->
+    use func *
+    fromCodePoint = import.func "wasm:js-string" "fromCodePoint" (param i32 => result (abs.ref extern))
+    cases
+      env, vars ->
+        codePoint = FuncCtx.local (VN I64)
+        pushTag VChar
+        env' = pushUnboxedVar VNat env (List.unsafeAt 0 vars)
+        local.tee codePoint
+        i64.const 1114112
+        local.get codePoint
+        i64.const 1114111
+        i64.leU()
+        select.numeric()
+        i32.wrapI64()
+        instr.call fromCodePoint
+        struct.new (Runtime.valueType VChar runtime)
+        env'
+
+{{
+`Text.uncons` and `Text.unsnoc` for warp's output, in wasm: the `wasm:js-string` `length` and `substring` builtins, with the `Optional` and the pair built in wasm (`None` is one shared box). Both split off one UTF-16 code unit, as warp's JS versions did.
+
+`textSplit fromFront` builds one of them: `true` is `uncons` (the first unit and the rest, `Some (c, rest)`), `false` is `unsnoc` (the rest and the last unit, `Some (rest, c)`).
+}}
+internal.runtime.replacements.unison_base.Text_uncons.textSplit : Boolean -> Replacement
+internal.runtime.replacements.unison_base.Text_uncons.textSplit fromFront = wasmExpression 1 cases
+  runtime ->
+    use func *
+    length = import.func "wasm:js-string" "length" (param externref => result i32)
+    substring = import.func "wasm:js-string" "substring" (param externref * param i32 * param i32 => result (abs.ref extern))
+    anyValueRef = Runtime.internalRef InternalType.Value runtime
+    valuesType = Runtime.internalType Values runtime
+    dataType = Runtime.valueType VData runtime
+    (optionalID, someCtor) = constructorGlobal (termLink Optional.Some)
+    (_, noneCtor) = constructorGlobal (termLink Optional.None)
+    (tupleID, consCtor) = constructorGlobal (termLink Tuple.Cons)
+    (unitID, unitCtor) = constructorGlobal (termLink Unit)
+    shared ctorID ctor = def.global (global.const anyValueRef) do
+      pushTag VData
+      global.get ctorID
+      i32.const ctor
+      newFixed valuesType 0
+      struct.new dataType
+    none = shared optionalID noneCtor
+    unit = shared unitID unitCtor
+    cases
+      env, vars ->
+        text = FuncCtx.local externref
+        size = FuncCtx.local i32
+        env' = pushUnboxedVar VText env (List.unsafeAt 0 vars)
+        local.tee text
+        instr.call length
+        local.tee size
+        i32.eqz()
+        piece ty start end =
+          pushTag ty
+          local.get text
+          start()
+          end()
+          instr.call substring
+          struct.new (Runtime.valueType ty runtime)
+        zero _ = i32.const 0
+        one _ = i32.const 1
+        last _ =
+          local.get size
+          i32.const 1
+          i32.sub()
+        whole _ = local.get size
+        pair first second =
+          pushTag VData
+          global.get tupleID
+          i32.const consCtor
+          first()
+          pushTag VData
+          global.get tupleID
+          i32.const consCtor
+          second()
+          global.get unit
+          newFixed valuesType 2
+          struct.new dataType
+          newFixed valuesType 2
+          struct.new dataType
+        split _ =
+          pushTag VData
+          global.get optionalID
+          i32.const someCtor
+          if fromFront then pair (_ -> piece VChar zero one) (_ -> piece VText one whole)
+          else pair (_ -> piece VText zero last) (_ -> piece VChar last whole)
+          newFixed valuesType 1
+          struct.new dataType
+        ifThenElse.withResult anyValueRef (_ -> global.get none) split
+        env'
+
+internal.runtime.replacements.unison_base.Text_uncons : Replacement
+internal.runtime.replacements.unison_base.Text_uncons = Text_uncons.textSplit true
+
+internal.runtime.replacements.unison_base.Text_unsnoc : Replacement
+internal.runtime.replacements.unison_base.Text_unsnoc = Text_uncons.textSplit false
 
 ---
 
