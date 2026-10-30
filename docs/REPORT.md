@@ -1844,6 +1844,23 @@ narrower boundary"):
 The boundary was not what held wasm-opt back: values stay boxed in generic arrays and are
 called through `call_ref`.
 
+**What stays in JS, and why.** Phase 1's counts set the order, and they end here:
+- **No calls in any suite:** `Char.Class`, `Bytes`, `Pattern` and `Text`'s char lists
+  are called by no operation of the rows, meals or cards suites (`results/boundary-*.json`).
+  Moving them would add code to every module for no measured gain. The JS character
+  classes use the `v` flag, so they match whole code points, and the pattern engine
+  steps by code point since `offer-3-text`.
+- **Text stays JS strings (option A).** Option B, `Text` as wasm arrays, would pay a
+  conversion at the DOM. Timed in Node 24 (`bench/frontend-wasm/textb/`, medians of 15):
+  - 10,000 strings of 30 characters built in `i16` arrays and made JS strings with
+    `fromCharCodeArray` take 0.66 ms, against 0.05 ms for handing over JS strings;
+  - copying 10,000 strings back with `intoCharCodeArray` takes 0.2 ms.
+
+  Creating 1,000 rows passes about 8,000 strings, so that is about 0.5 ms, under 1%. The
+  conversion is not the obstacle. B has nothing to win in these apps, since option A
+  already runs `Text`'s operations without a JS call. It is worth reopening for indexing
+  by code point in constant time, or if closed-world analysis needs `Text` as wasm data.
+
 ### A floor for a tree without ink
 
 `docs/ProsceniumTree.md` proposes a tree of Proscenium's own in place of ink. Before
