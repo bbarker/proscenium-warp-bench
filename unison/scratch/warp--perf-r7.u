@@ -626,6 +626,96 @@ internal.runtime.replacements.unison_base.Universal_eq.defineEqValues
   eqValues
 
 
+
+ReleaseNotes : Doc
+ReleaseNotes =
+  {{
+  * Introduced a notion of incremental builds, enabling
+    {type IO}-based builds to produce lightweight WebAssembly modules
+    containing only terms that weren't already present in previous build
+    output. See {incremental} and {loadCompiledTerms} for details.
+  * 2026-10-30: JS builtins can take their arguments unboxed and box their
+    results in wasm ({internal.Replacement.jsUnboxed}), so the JS function
+    makes no calls back into wasm. The `JSValue` interop functions
+    (`invoke*`, `getProperty`, `setProperty*`, `callback1_`), `Nat.toText`
+    and `Text.indexOf` use it. A UI creating 1,000 table rows crossed the
+    wasm–JS boundary 197,231 times before and 32,046 after.
+  * 2026-10-30: `Universal.==` compares a plain function with a closure by
+    id in wasm instead of in JS.
+  * 2026-10-30: `Universal.compare`, `Universal.==` and the builtins with a
+    `Boolean` result return shared result boxes
+    ({internal.Replacement.sharedValues}) instead of allocating one per call.
+  * 2026-10-30: `Text.size`, `Text.take` and `Text.drop` run in wasm over the
+    `wasm:js-string` builtins (`length`, `substring`), with no call into JS.
+  }}
+
+{{
+`Text.size` for warp's output, in wasm: the `wasm:js-string` `length` builtin, which V8 compiles inline. It counts UTF-16 code units, as warp's `Text` builtins do.
+}}
+internal.runtime.replacements.unison_base.Text_size : Replacement
+internal.runtime.replacements.unison_base.Text_size = wasmExpression 1 cases
+  runtime ->
+    use func *
+    length = import.func "wasm:js-string" "length" (param externref => result i32)
+    cases
+      env, vars ->
+        pushTag VNat
+        env' = pushUnboxedVar VText env (List.unsafeAt 0 vars)
+        instr.call length
+        i64.extendI32U()
+        struct.new (Runtime.valueType VNat runtime)
+        env'
+
+{{
+`Text.take` and `Text.drop` for warp's output, in wasm: the `wasm:js-string` `substring` builtin, with the count clamped to the text's `length`, so no call reaches JS. Both count UTF-16 code units, as warp's `Text` builtins do.
+
+`textSlice keepFront` builds one of them: `true` keeps the first `n` units, `false` drops them.
+}}
+internal.runtime.replacements.unison_base.Text_take.textSlice : Boolean -> Replacement
+internal.runtime.replacements.unison_base.Text_take.textSlice keepFront = wasmExpression 2 cases
+  runtime ->
+    use func *
+    length = import.func "wasm:js-string" "length" (param externref => result i32)
+    substring = import.func "wasm:js-string" "substring" (param externref * param i32 * param i32 => result (abs.ref extern))
+    cases
+      env, vars ->
+        count = FuncCtx.local (VN I64)
+        text = FuncCtx.local externref
+        size = FuncCtx.local (VN I64)
+        pushTag VText
+        env1 = pushUnboxedVar VNat env (List.unsafeAt 0 vars)
+        local.set count
+        env2 = pushUnboxedVar VText env1 (List.unsafeAt 1 vars)
+        local.tee text
+        instr.call length
+        i64.extendI32U()
+        local.set size
+        local.get text
+        clamped _ =
+          local.get count
+          local.get size
+          local.get count
+          local.get size
+          i64.ltU()
+          select.numeric()
+          i32.wrapI64()
+        if keepFront then
+          i32.const 0
+          clamped()
+        else
+          clamped()
+          local.get size
+          i32.wrapI64()
+        instr.call substring
+        struct.new (Runtime.valueType VText runtime)
+        env2
+
+internal.runtime.replacements.unison_base.Text_take : Replacement
+internal.runtime.replacements.unison_base.Text_take = Text_take.textSlice true
+
+internal.runtime.replacements.unison_base.Text_drop : Replacement
+internal.runtime.replacements.unison_base.Text_drop = Text_take.textSlice false
+
 ---
 
 {{

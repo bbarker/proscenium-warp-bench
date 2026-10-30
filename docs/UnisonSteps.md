@@ -187,11 +187,15 @@ scratch/main> clone @dfreeman/warp/releases/1.3.0 @dfreeman/warp/perf-r4
 Each later change to warp `perf-r7` was picked up the same way, with
 `fork @dfreeman/warp/perf-r7: lib.dfreeman_warp_r7<x>` and
 `upgrade <previous> dfreeman_warp_r7<x>`. In the original working copy the lib is
-`dfreeman_warp_r7d`, after four forks:
+`dfreeman_warp_r7e`, after five forks:
 1. the boundary change;
 2. the equality fix redone on round 4's version;
 3. shared results;
-4. `Nat.toText`, `Text.indexOf` and a shared `()`.
+4. `Nat.toText`, `Text.indexOf` and a shared `()`;
+5. `Text.size`, `take` and `drop` over `wasm:js-string`, with the release notes.
+
+The `perf-r7u` and `perf-r7w` branches were made from Proscenium `perf-r7` while its lib
+was `dfreeman_warp_r7d`.
 
 The js-framework-benchmark app is on `perf-r7` too (`bench.jfb`):
 

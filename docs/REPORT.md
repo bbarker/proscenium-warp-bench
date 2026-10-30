@@ -1461,6 +1461,10 @@ What changed, all in warp:
 
   Unison values are immutable and compared by value, so sharing a box changes nothing a
   program can observe.
+- **`Text.size`, `Text.take` and `Text.drop` run in wasm,** over the `wasm:js-string`
+  builtins `length` and `substring`, which V8 compiles inline. This is the first step of
+  keeping JS strings as Unison's `Text` while moving its operations out of JS. They are
+  not hot in these apps, and were added after the timings.
 
 Checks:
 - warp's `tests` pass.
