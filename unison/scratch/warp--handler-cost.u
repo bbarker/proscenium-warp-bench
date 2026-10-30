@@ -1,0 +1,97 @@
+ability bench.handlerCost.Tick where
+  tick : Nat -> Nat
+
+{{
+A handler written the way UI handlers carry their state: a recursive function that re-handles the rest of the computation with new state, resuming through `do resume x`. Each `tick n` answers with the state before it and adds `n` to it.
+}}
+bench.handlerCost.run : Nat -> '{Tick} r -> r
+bench.handlerCost.run state body =
+  handle body()
+  with cases
+    { r } -> r
+    { tick n -> resume } -> bench.handlerCost.run (state Nat.+ n) do resume state
+
+{{ Performs `n` operations, adding up their answers. }}
+bench.handlerCost.ticks : Nat -> Nat -> Nat ->{Tick} Nat
+bench.handlerCost.ticks i n acc =
+  if i Nat.== n then acc
+  else bench.handlerCost.ticks (i Nat.+ 1) n (acc Nat.+ tick i)
+
+{{ `n` operations through {bench.handlerCost.run}. }}
+bench.handlerCost.handled : Nat -> Nat
+bench.handlerCost.handled n = bench.handlerCost.run 0 do bench.handlerCost.ticks 0 n 0
+
+ability bench.handlerCost.Other where
+  other : Nat -> Nat
+
+{{ Handles another ability, so a `Tick` operation performed under it has one more frame to walk past and copy back. }}
+bench.handlerCost.passOther : Request {Other} r -> r
+bench.handlerCost.passOther = cases
+  { r } -> r
+  { other n -> resume } -> handle resume n with bench.handlerCost.passOther
+
+{{ Runs `body` under `depth - i` handlers of {type bench.handlerCost.Other}. }}
+bench.handlerCost.around : Nat -> Nat -> '{Tick} r ->{Tick} r
+bench.handlerCost.around i depth body =
+  if i Nat.== depth then body()
+  else handle bench.handlerCost.around (i Nat.+ 1) depth body with bench.handlerCost.passOther
+
+{{ `n` operations through {bench.handlerCost.run}, each performed under `depth` other handlers, as an emit deep in a UI tree is under the handlers of every level above it. }}
+bench.handlerCost.handledUnder : Nat -> Nat -> Nat
+bench.handlerCost.handledUnder depth n =
+  bench.handlerCost.run 0 do bench.handlerCost.around 0 depth do bench.handlerCost.ticks 0 n 0
+
+{{ The handler's clause as a function, which is what a tail-resumptive path would call at the operation: the value to resume with, and the new state. }}
+bench.handlerCost.clause : Nat -> Nat -> (Nat, Nat)
+bench.handlerCost.clause state n = (state, state Nat.+ n)
+
+{{ The same `n` operations as calls to {bench.handlerCost.clause}, carrying the state along. }}
+bench.handlerCost.directTicks : Nat -> Nat -> Nat -> Nat -> Nat
+bench.handlerCost.directTicks i n acc state =
+  if i Nat.== n then acc
+  else
+    match bench.handlerCost.clause state i with
+      (answer, state') -> bench.handlerCost.directTicks (i Nat.+ 1) n (acc Nat.+ answer) state'
+
+{{ `n` operations as direct calls. }}
+bench.handlerCost.direct : Nat -> Nat
+bench.handlerCost.direct n = bench.handlerCost.directTicks 0 n 0 0
+
+{{ Exposes `fn` to JavaScript as a function of no arguments that runs it for a million operations and returns the result as a number. }}
+bench.handlerCost.expose : Text -> (Nat -> Nat) ->{TypeCtx, Exception, ModuleCtx, Warp} ()
+bench.handlerCost.expose name fn =
+  call _ = JSValue.number (Nat.toFloat (fn 1000000))
+  exposeFunction name call
+
+{{ Runs a build, ignoring its progress events. }}
+bench.handlerCost.quiet : '{g, Stream e} a ->{g} a
+bench.handlerCost.quiet body =
+  handle body()
+  with cases
+    { a } -> a
+    { Stream.emit _ -> resume } -> bench.handlerCost.quiet resume
+
+{{
+Writes `handler-cost.wasm` and `handler-cost.loader.js` under the directory given, exposing `handled` ({bench.handlerCost.handled}), `under4` and `under16` ({bench.handlerCost.handledUnder} at those depths) and `direct` ({bench.handlerCost.direct}). Run with `run bench.handlerCost.build <dir>`.
+}}
+bench.handlerCost.build : '{IO, Exception} ()
+bench.handlerCost.build = do
+  match IO.getArgs() with
+    [outDir] ->
+      config = BuildConfig [] NoReflection false false
+      output = bench.handlerCost.quiet do
+        warp.withProgressEvents config do
+          bench.handlerCost.expose "handled" bench.handlerCost.handled
+          bench.handlerCost.expose "direct" bench.handlerCost.direct
+          bench.handlerCost.expose "under4" (bench.handlerCost.handledUnder 4)
+          bench.handlerCost.expose "under16" (bench.handlerCost.handledUnder 16)
+      writeFile (FilePath (outDir Text.++ "/handler-cost.wasm")) (moduleBytes output)
+      writeFile (FilePath (outDir Text.++ "/handler-cost.loader.js")) (loaderBytes output)
+    _ -> printLine "usage: <outDir>"
+
+{{ Both ways give the same sum. }}
+bench.handlerCost.tests.same : [Result]
+bench.handlerCost.tests.same =
+  verify do
+    ensureEqual (bench.handlerCost.handled 1000) (bench.handlerCost.direct 1000)
+    ensureEqual (bench.handlerCost.handledUnder 3 1000) (bench.handlerCost.direct 1000)

@@ -363,6 +363,22 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/proscenium/perf-r7-mini> compile bench.mini.rowsh.build target/unison/frontend-bench/rows-build-minih4
 ```
 
+- [ ] Handlers that resume once, measured: warp `detect-tail-resumptive` reports each
+      handler arm's shape as it compiles (run any build on it, such as Proscenium's
+      `bench.rowsfg.build`, with the classifier's library in place of `dfreeman_warp_r7f`),
+      and warp `handler-cost` times a million operations (`bench/handler-cost/run.mjs`):
+
+```ucm
+@dfreeman/warp/perf-r7> branch /detect-tail-resumptive
+@dfreeman/warp/detect-tail-resumptive> load unison/scratch/warp--detect-tail-resumptive.u
+@dfreeman/warp/detect-tail-resumptive> update
+@dfreeman/warp/perf-r7> branch /handler-cost
+@dfreeman/warp/handler-cost> load unison/scratch/warp--handler-cost.u
+@dfreeman/warp/handler-cost> add
+@dfreeman/warp/handler-cost> test bench.handlerCost
+@dfreeman/warp/handler-cost> run bench.handlerCost.build target/unison/handler-cost
+```
+
 - [ ] One-shot continuations, an experiment: warp `guard-one-shot` makes a second resume
       of any captured continuation trap, and Proscenium `perf-r7-guard` runs the apps on it:
 
@@ -426,6 +442,8 @@ Suggested `history.comment` lines:
 - warp/perf-r7-142: `Text by code point, as on offer-3-text, with the wasm Text builtins of round 7 rewritten as code point loops`
 - proscenium/perf-r7-142: `on warp perf-r7-142 with Text by code point`
 - warp/guard-one-shot: `experiment: shift::continue poisons its data after the first resume, so a second resume of any continuation traps`
+- warp/detect-tail-resumptive: `measurement: anfToOps reports through Debug.trace whether each request-match arm resumes once in tail position (internal.build.Op.tailShape)`
+- warp/handler-cost: `bench.handlerCost: a million ability operations through a recursive state-carrying handler, under 0, 4 and 16 other handlers, against plain calls`
 - proscenium/perf-r7-guard: `perf-r7 on warp guard-one-shot, to show that nothing resumes a continuation twice`
 - proscenium/perf-r7-tree: `bench.tree: Proscenium's Render API on a tree of its own with one handler, cells by path and a memo per element; bench.rows.ui runs on it unchanged`
 - ink/offer-1-ordering: `keyed reconcile in O(n log n); a new child moves with a moved predecessor; regression tests for a rotate and insert and a swap and insert`

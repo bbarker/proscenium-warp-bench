@@ -186,7 +186,8 @@ repeat it.
 
   The fixes, in order: unwrap arguments in wasm instead of in the glue; allocate less in
   generic and partial application; compile handlers that resume once, at the end, as
-  direct calls; finish `==` and `compare` in wasm. See "Measured attribution".
+  direct calls (measured since at 2–3%, and not built); finish `==` and `compare` in
+  wasm. See "Measured attribution".
 - **Round 7 did the first and the last.**
   - **Boundary:** warp's JS interop takes its arguments unboxed, `==` compares functions
     in wasm, and comparisons share their result boxes. warp now crosses the boundary as
@@ -227,6 +228,16 @@ repeat it.
   With every captured continuation made one-shot, the three apps pass every check and
   suite. Only base's `Each` resumes twice. That answers the cost the author named for
   dropping CPS in favour of stack switching.
+- **Neither handler shortcut would pay yet.**
+  - **A direct path for handlers that resume once:** every one of the 41 operations a
+    row has the shape ("Handlers that resume once"). But an operation costs about 70 ns
+    in warp's output, so the most such a path could save is about 3 ms per 1,000 rows,
+    2–3%.
+  - **Stack switching:** in Chromium's experimental V8, a switch costs 53–55 ns, as much
+    as warp's continuation passing ("Stack switching, timed at the mechanism").
+
+  The cost of a row is in ink's bookkeeping and the DOM, which the tree prototype
+  removed.
 - **A Leptos limit we may hit:** the 1,600-card benchmark app puts 80 page components in
   one `view!`, and mounting it overflowed wasm's default 1 MB stack. This happened in both
   dev and release builds, as `memory access out of bounds`, and an 8 MB stack fixed it.
@@ -1952,8 +1963,9 @@ What this says:
   operation per element: 11 operations and 390 allocations a row more than plain data,
   13–24% more time to create rows. That is the shape a tree of Proscenium's own behind
   the current API would have. It is still well ahead of round 7's 41 operations a row.
-  Phase 4's tail-resumptive path would narrow it further: these 11 operations are exactly
-  the shape it targets.
+  Phase 4's tail-resumptive path would narrow it only a little. These 11 operations are
+  the shape it targets, but at about 70 ns an operation they cost under 1 ms per 1,000
+  rows ("Handlers that resume once"), so most of the gap is elsewhere.
 - **Most of the size is Proscenium's and ink's code.** Without them, the module is
   18 KB brotli against round 7's 43 KB, and warp emits 179 terms instead of 526, in a
   third of the time. (An earlier version of this section said 139 KB and 2,884 terms;
@@ -2287,6 +2299,38 @@ make these UIs faster yet. What would is fewer allocations per operation: phase 
 tail-resumptive path, or a leaner `shift` and `hnd`. Multi-shot handlers are not the
 obstacle either. Nothing in Proscenium or ink resumes twice ("One-shot continuations").
 
+### Handlers that resume once: detected, and the ceiling measured
+
+Phase 4's tail-resumptive path (`docs/TailResumptive.md`) was taken as far as knowing
+what it could save, and stopped there.
+
+**Detected in warp's codegen** (`@dfreeman/warp/detect-tail-resumptive`). A classifier in
+`anfToOps` reports the shape of every request-match arm as warp compiles it. The UI
+handlers are recursive functions, `go state body = handle body() with ...`, whose clauses
+end by calling `go` with new state and `resume` (or `do resume x`), so it follows `resume`
+into closures and partial applications. Of round 7's 32 arms, 25 qualify, including every
+arm of `Render`, `Incremental`, `Stream`, `UseCell` and `Rows`. **All 41 operations a row
+qualify.** The five that don't keep their continuation by design (the session's `Yield`,
+warp's `JS.Async`), resume and then do more work (`Suspend`), or run once per event
+(`Extractor.Extract`).
+
+**The ceiling** (`@dfreeman/warp/handler-cost`, `bench/handler-cost/`). A million
+operations, through a handler written the same way and as plain calls to its clause:
+
+| Per operation (Chromium 149, medians of 15) | ns |
+| --- | --- |
+| through the handler | 67–75 |
+| through the handler, under 4 other handlers | 104–116 |
+| through the handler, under 16 other handlers | 216–248 |
+| plain calls | 2.0–2.2 |
+
+Round 7's counts put the app's operations in the first row. Creating 1,000 rows makes
+41,044 shifts and copies 4,008 frames, so almost no operation has a frame between it and
+its handler. **That caps the saving at about 3 ms per 1,000 rows created, 2–3%.** That is
+not worth recognising the handler pattern across two functions, compiling the arms twice
+and giving frames a mutable handler. The operations' garbage dies young. The cost of a
+row is in ink's bookkeeping and the DOM, which the tree prototype removed for 32–39%.
+
 ### Next experiments, by expected payoff
 
 Re-ranked on 2026-10-30. Two earlier items are dropped: ahead-of-time unboxing, which
@@ -2300,10 +2344,10 @@ boundary (round 7).
    values. The floor ("A floor for a tree without ink") says this is where most of the
    remaining cost is: a quarter of the allocations, and 37% less time to create rows.
 2. **warp: continuation handling.**
-   - Compile a handler that resumes once, in tail position, as a direct call.
-     ink's `reconcile.handler`, which every element goes through, has that shape: it
-     resumes once and re-handles with new state. Each operation now costs a frame-list
-     walk, 4 allocations to capture, a copy of the frames on resume, and 5 to re-handle.
+   - Compiling a handler that resumes once, in tail position, as a direct call is
+     measured and not worth building now: every operation on the rows path qualifies,
+     but an operation costs about 70 ns, 3 ms per 1,000 rows ("Handlers that resume
+     once").
    - A cheaper entry for calls in from JS than `callDirect`'s root continuation is
      not worth it in these apps. Every operation makes 7 calls in, and an animated move
      makes 100 over 31 frames, against thousands of allocations per operation.
@@ -2352,7 +2396,11 @@ boundary (round 7).
   - `totext.mjs`: times a builtin's implementations against each other in Node
     (`Nat.toText`: JS, unboxed JS, Unison, instruction DSL).
 - `docs/TailResumptive.md`: the design note for compiling a handler that resumes once, at
-  the end, as a direct call.
+  the end, as a direct call, with the shapes detected and the ceiling measured.
+- `bench/handler-cost/`: `run.mjs` times warp `handler-cost`'s million operations in
+  Chromium; `results/` holds the runs.
+- `bench/stack-switching/`: `handlers.wat` and `run.mjs`, the stack-switching mechanism
+  timed against continuation passing.
 - `bench/js-framework-benchmark/`: the Proscenium entry for js-framework-benchmark
   (`keyed-proscenium/`), `install.nu` to put it into a checkout, and `summary.nu` to
   tabulate a run.
@@ -2384,8 +2432,9 @@ boundary (round 7).
     rows app is `bench.rowsfg` and the 400 stateful cards `bench.cards.s400i`
   - round 7 and after, on 2026-10-30:
     - warp `perf-r7`, `perf-r7u`, `perf-r7w`, `perf-r7-142`, the stacked offers
-      `offer-1-compare-eq` and `offer-2-list`, the standalone `offer-3-text`, and the
-      experiment `guard-one-shot`;
+      `offer-1-compare-eq` and `offer-2-list`, the standalone `offer-3-text`, the
+      experiment `guard-one-shot`, and the measurements `detect-tail-resumptive` and
+      `handler-cost`;
     - Proscenium `perf-r7`, `bench-jfb`, `perf-r7-142`, `perf-r7-guard`, the floor
       `perf-r7-mini` (`bench.mini`) and the prototype `perf-r7-tree` (`bench.tree`).
 

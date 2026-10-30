@@ -29,7 +29,8 @@ And two directions to decide on, with the measurements below:
   unchanged, and the 400-card page. It beats ink on every operation of the fine-grained
   rows app except append, where it is 5% slower.
 - **One-shot stack switching.** It would be enough for ink and Proscenium: nothing in
-  them resumes a continuation twice.
+  them resumes a continuation twice. Today it would not make them faster, and nor would
+  a direct path for handlers that resume once ("What is left", below).
 
 The branches the benchmark started from are against warp 1.3.0, Proscenium 0.4.3 and ink
 2.0.1. The table at the end lists them all.
@@ -101,6 +102,18 @@ ink's handler, which every element goes through, has that tail-resumptive shape.
 we could find, nothing in ink or Proscenium resumes a continuation twice. The one place it
 could happen is a `Session`, which holds its continuation as a value.
 
+Both were then measured, and neither pays yet:
+- **Tail-resumptive handlers.** A classifier in warp's `anfToOps` (warp
+  `detect-tail-resumptive`) finds that all 41 operations a row go through clauses that
+  resume once, in tail position. The UI handlers are recursive functions,
+  `go state body = handle body() with ...`, so the re-handle is a tail call to `go` with
+  new state. But warp `handler-cost` times an operation at about 70 ns against 2 ns for a
+  plain call, and the app's operations almost never have a frame between them and their
+  handler. So a direct path could save at most about 3 ms per 1,000 rows, 2–3%. It is
+  not built.
+- **Stack switching.** In Chromium's experimental V8, a `suspend` and `resume` cost
+  53–55 ns, as much as warp's continuation passing today.
+
 ## js-framework-benchmark
 
 `bench/js-framework-benchmark/` is a `frameworks/keyed/proscenium` entry:
@@ -164,6 +177,7 @@ paid off for `compare`, `==` and `List`.
 | Proscenium `perf-r7`, `bench-jfb` | the benchmark apps, including `bench.jfb` and `bench.jfbstock` for js-framework-benchmark | Bench code only |
 | warp `offer-3-text` | on 1.4.2, standalone: `Text` by code point, which fixes emoji splitting and missed text `match` arms; the differential text fuzz | Yes |
 | warp `guard-one-shot`, Proscenium `perf-r7-guard` | every continuation one-shot, to show that nothing in Proscenium or ink resumes twice | No: an experiment |
+| warp `detect-tail-resumptive`, `handler-cost` | which handler arms resume once in tail position, and what an operation costs against a plain call | No: measurements |
 | Proscenium `perf-r7-mini` | `bench.mini`, the floor for a tree without ink | Bench code only |
 
 The branches above are against 1.3.0. **`@dfreeman/warp/perf-r7-142` is all of the warp

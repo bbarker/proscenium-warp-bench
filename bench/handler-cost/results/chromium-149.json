@@ -1,0 +1,5 @@
+{"date":"2026-10-30","browser":"Chromium 149, headless","warp":"perf-r7 (handler-cost branch)","runs":[
+{"operations":1000000,"medianMs":{"handled":75.2,"under4":116.3,"under16":246.9,"direct":2.2},"nsPerOperation":{"handled":75.2,"under4":116.3,"under16":246.9,"direct":2.2}}
+,
+{"operations":1000000,"medianMs":{"handled":73.1,"under4":115.1,"under16":248.4,"direct":2.2},"nsPerOperation":{"handled":73.1,"under4":115.1,"under16":248.4,"direct":2.2}}
+],"load":"10.40 8.75 12.44"}

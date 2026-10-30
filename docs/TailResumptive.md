@@ -1,8 +1,11 @@
 # Handlers that resume once, at the end: design note for warp
 
-Written 2026-10-30, as phase 4 of the plan after the author's review. It is a design, not
-built yet. It says how warp handles abilities today, what that costs in a UI, and how warp
-could skip capturing a continuation for the commonest kind of handler clause.
+Written 2026-10-30, as phase 4 of the plan after the author's review. It says how warp
+handles abilities today, what that costs in a UI, and how warp could skip capturing a
+continuation for the commonest kind of handler clause. The shape was then detected in
+warp's codegen ("Detected in warp's codegen", below), and the most it could save was
+measured before building it ("The ceiling, measured"). That ceiling is about 3 ms per
+1,000 rows created, 2–3% of the time, so the direct path is not built.
 
 ## What warp does today
 
@@ -97,17 +100,103 @@ So the direct path needs four things:
    continuing with `e`, rather than pushing a new frame.
 
 Without the last, every operation would add a handler frame to the stack, and
-`findFrame`'s walk would grow with each one. That is several days of compiler work. The
-smaller change that was made, a shared completion continuation in `hnd` (below), takes
-2 of `hnd`'s 5 allocations off every `handle`.
+`findFrame`'s walk would grow with each one. The smaller change that was made, a shared
+completion continuation in `hnd` (below), takes 2 of `hnd`'s 5 allocations off every
+`handle`.
+
+## Detected in warp's codegen
+
+warp `detect-tail-resumptive` adds a classifier, `internal.build.Op.tailShape`, to
+`anfToOps`. Every arm of a request match is classified as warp compiles it, and the
+result is reported through `Debug.trace`. The classifier reads UCM's A-normal form, where
+an arm that uses its continuation first names `resume` (the builtin `jumpCont` applied to
+it). It follows `resume` through each binding: into a closure that captures it once, or
+into a partial application that takes it once (warp knows a term's arity from its
+signature), which is how `do resume x` compiles. An arm qualifies when it ends in one of
+three ways:
+
+- `resume x`;
+- `handle resume x with h`;
+- a tail call that passes `resume`, or a closure holding it, exactly once.
+
+A `match` along the way qualifies when every branch does.
+
+The UI handlers are written in the third form, not the second. Proscenium's render
+handler is a local recursive function, `go ns subkeys body = handle body() with ...`,
+and its clauses end `go ns subkeys resume` or `go ns subkeys do resume x`. ink's
+reconcile handler is written the same way. So the re-handle the proposal describes
+happens in the callee: what it calls is the handler's own function, applied to new state.
+
+Compiling round 7's fine-grained rows app (`results/tail-resumptive-arms-rowsfg.txt`)
+classifies 32 arms:
+
+| Shape | Arms | Abilities |
+| --- | --- | --- |
+| tail call with `resume` | 25 | every arm of `Render` (5), ink's `Incremental` (3, in two handlers), `Stream`, `UseCell` (2), the app's `Rows` (2), `Update`, `Schedule` (5), `Effect` (2), and one of `Extractor.Extract`'s |
+| no resume | 2 | `Exception`, and one of `Extract`'s |
+| other | 5 | the session's `Yield` and warp's `JS.Async`, which keep the continuation to resume later; `Suspend`, which resumes and then works on; two of `Extract`'s |
+
+Every operation on the path of creating a row is in the first group: `Render` 13 a row,
+`Incremental` 12, `Stream` 10, `UseCell` 4 and `Rows` 2 (the report's "Continuations by
+ability"). So all 41 operations a row would take a direct path. The arms that do not
+qualify keep their continuation by design (pausing the session, awaiting a promise) or
+run once per event, not per row.
+
+## The ceiling, measured
+
+Before building the direct path, warp `handler-cost` measures what it could save
+(`bench/handler-cost/`). A million operations go through a handler written the way UI
+handlers are, `run state body = handle body() with { tick n -> resume } -> run (state + n)
+do resume state`. The same work is then done as plain calls to the clause as a function
+returning the answer and the new state, which is what a direct path would call. Medians of
+15 in headless Chromium 149 (`results/chromium-149.json`):
+
+| | ns per operation |
+| --- | --- |
+| through the handler, no frame in between | 67–75 |
+| through the handler, under 4 other handlers | 104–116 |
+| through the handler, under 16 other handlers | 216–248 |
+| plain calls | 2.0–2.2 |
+
+Each frame between the operation and its handler adds about 9 ns: the walk to find the
+handler, and the copy of the frames when resuming. In the app, operations have almost no
+frames in between. Creating 1,000 rows on round 7 makes 41,044 shifts and copies only
+4,008 frames (`results/sites-rows-r7.json`). So the no-frame figure is the one that
+applies.
+
+That puts the ceiling at about 41,000 × 70 ns, **about 3 ms per 1,000 rows created**.
+A real direct path would also find the frame, check its flag, make an indirect call and
+build the new handler's closure, so it would save less. Creating 1,000 rows takes about
+100–150 ms on round 7, depending on load, so the saving is 2–3%. Interactions perform far
+fewer operations than creating rows, and would save less.
+
+That is far less than the operations' share of allocations, about 10%, suggests. The
+operations' garbage dies young and is cheap. The cost of creating a row is elsewhere: in
+ink's bookkeeping (keys of `Any` segments compared through `Universal.compare`, maps per
+element) and in the DOM. A tree of Proscenium's own removed those, and created rows
+32–39% faster (`docs/ProsceniumTree.md`).
+
+Building the direct path would take:
+
+- recognising the recursive handler function across two functions, the handler's
+  function and the arms' lambda;
+- a second compilation of the arms that returns the answer and the new state in place of
+  the tail call;
+- a frame flag, a mutable handler field and a check in `dispatch`;
+- the fallback when a frame in between handles what the clause performs.
+
+That is not worth 2–3%, so it is not built. The classifier stays on its branch, ready for
+the case that would change this: a page whose operations sit under many handlers (each
+frame adds 9 ns), or a warp whose other costs have fallen far enough that 70 ns an
+operation stands out.
 
 ## What it would save
 
 Per operation: the 4 allocations of `shift`, the frame copies of `attachFrame`, the
 `Request`, and the 5 of the re-handle, against one call and a two-field result. At 41
 operations a row that is at least 370 of round 7's 4,356 allocations a row (8%), plus the
-frames copied and the walks repeated on resume. The frames' share is not measured
-separately.
+frames copied and the walks repeated on resume. In time it is less, 2–3% of creating
+rows ("The ceiling, measured", above).
 
 ## Risks and what to check
 

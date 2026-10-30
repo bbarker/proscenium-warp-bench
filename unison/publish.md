@@ -25,6 +25,8 @@ Each line is `push <remote> <local>`. A branch that is already pushed and unchan
 @dfreeman/proscenium/bench> push @nusentry/warp/offer-3-text @dfreeman/warp/offer-3-text
 @dfreeman/proscenium/bench> push @nusentry/proscenium/offer-stores @dfreeman/proscenium/offer-stores
 @dfreeman/proscenium/bench> push @nusentry/warp/guard-one-shot @dfreeman/warp/guard-one-shot
+@dfreeman/proscenium/bench> push @nusentry/warp/detect-tail-resumptive @dfreeman/warp/detect-tail-resumptive
+@dfreeman/proscenium/bench> push @nusentry/warp/handler-cost @dfreeman/warp/handler-cost
 @dfreeman/proscenium/bench> push @nusentry/warp/perf-r7-142 @dfreeman/warp/perf-r7-142
 @dfreeman/proscenium/bench> push @nusentry/proscenium/bench @dfreeman/proscenium/bench
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf @dfreeman/proscenium/perf

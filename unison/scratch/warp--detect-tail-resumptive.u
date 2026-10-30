@@ -1,0 +1,466 @@
+{{
+How a request-match arm ends, as phase 4 of the review plan asks: whether it could take a tail-resumptive path, resuming its continuation once in tail position, with no other use of it.
+
+`body` is what follows the arm's `AShift`, where the continuation is variable 0 (variables are de Bruijn indices). An arm that uses its continuation first names `resume`, the builtin `jumpCont` applied to it: inside, `resume` is variable 0 and the raw continuation variable 1, which must then not be used again. The walk follows `resume` into a closure that captures it once (the old variable must then go unused), since `do resume x` becomes such a closure. The answer is one of:
+- `resume`: the arm ends `resume x`;
+- `handle-resume`: it ends `handle resume x with h`: under a handler, it applies `resume`, or forces a closure that captured `resume` once (which is how `handle resume x with h` compiles);
+- `tail-call-with-resume`: it ends with a call, in tail position, that passes `resume` once as an argument, which is how a recursive handler written `go state resume` re-handles: the callee handles it (Proscenium's render handler and ink's reconcile handler are written this way);
+- `no-resume`: the continuation is never used, as in an abort;
+- `other`: anything else, such as resuming twice, storing the continuation, or resuming before more work.
+
+A partial application that takes `resume` once, which is how `do resume x` compiles when the lambda is lifted, is followed like a closure. `partial ref n` says whether applying `ref` to `n` arguments is partial; warp knows it from the term's signature.
+
+A `match` along the way (often just the destructuring of a tuple) qualifies when every branch does.
+}}
+internal.build.Op.tailShape : (Reference -> Nat ->{g} Boolean) -> ANormal ->{g} Text
+internal.build.Op.tailShape partial body =
+  use Nat + ==
+  isVar k = cases Var v -> v == k
+  funcMentions k = cases
+    FVar v -> isVar k v
+    FCont v -> isVar k v
+    _ -> false
+  mentions k = cases
+    AApp f vars -> funcMentions k f || List.any (isVar k) vars
+    AFrc v -> isVar k v
+    AVar v -> isVar k v
+    AHnd _ v rest -> isVar k v || mentions k rest
+    ALet _ mems value rest -> mentions k value || mentions (k + List.size mems) rest
+    ALit _ -> false
+    ABLit _ -> false
+    AMatch v branched -> isVar k v || branchedMentions k branched
+    AName head vars rest ->
+      headMentions = match head with
+        Right v -> isVar k v
+        Left _ -> false
+      headMentions || List.any (isVar k) vars || mentions (k + 1) rest
+    AShift _ rest -> mentions (k + 1) rest
+  armsMention k arms = List.any (cases (_, (mems, armBody)) -> mentions (k + List.size mems) armBody) arms
+  defaultMentions k = cases
+    Some d -> mentions k d
+    None -> false
+  branchedMentions k = cases
+    MatchData _ arms d -> armsMention k arms || defaultMentions k d
+    MatchIntegral arms d -> List.any (cases (_, b) -> mentions k b) arms || defaultMentions k d
+    MatchNumeric _ arms d -> List.any (cases (_, b) -> mentions k b) arms || defaultMentions k d
+    MatchRequest abilities d -> List.any (cases (_, arms) -> armsMention k arms) abilities || mentions k d
+    MatchSum arms -> armsMention k arms
+    MatchText arms d -> List.any (cases (_, b) -> mentions k b) arms || defaultMentions k d
+  countIn k vars = List.size (List.filter (isVar k) vars)
+  go k = cases
+    AApp (FVar v) args | isVar k v && Boolean.not (List.any (isVar k) args) -> "resume"
+    AFrc v | isVar k v -> "resume"
+    AHnd _ h (AApp (FVar v) args) | isVar k v && Boolean.not (isVar k h) && Boolean.not (List.any (isVar k) args) -> "handle-resume"
+    AHnd _ h (AFrc v) | isVar k v && Boolean.not (isVar k h) -> "handle-resume"
+    AApp (FComb _) args | countIn k args == 1 -> "tail-call-with-resume"
+    AApp (FVar f) args | Boolean.not (isVar k f) && (countIn k args == 1) -> "tail-call-with-resume"
+    ALet _ [_] (AApp (FComb ref) args) rest | (countIn k args == 1) && partial ref (List.size args) ->
+      if mentions (k + 1) rest then "other" else go 0 rest
+    ALet _ mems value rest -> if mentions k value then "other" else go (k + List.size mems) rest
+    AMatch v branched | Boolean.not (isVar k v) ->
+      shapes = match branched with
+        MatchData _ arms d -> List.map (cases (_, (mems, b)) -> go (k + List.size mems) b) arms List.++ (Optional.toList d |> List.map (go k))
+        MatchSum arms -> List.map (cases (_, (mems, b)) -> go (k + List.size mems) b) arms
+        MatchIntegral arms d -> List.map (cases (_, b) -> go k b) arms List.++ (Optional.toList d |> List.map (go k))
+        MatchNumeric _ arms d -> List.map (cases (_, b) -> go k b) arms List.++ (Optional.toList d |> List.map (go k))
+        MatchText arms d -> List.map (cases (_, b) -> go k b) arms List.++ (Optional.toList d |> List.map (go k))
+        MatchRequest _ _ -> ["other"]
+      qualifying = List.filter (shape -> shape !== "other" && shape !== "no-resume") shapes
+      if List.size qualifying == List.size shapes then List.head qualifying |> Optional.getOrElse "no-resume"
+      else if List.all (shape -> shape === "no-resume") shapes then "no-resume"
+      else "other"
+    AName (Left _) args rest | countIn k args == 1 ->
+      if mentions (k + 1) rest then "other" else go 0 rest
+    AName head args rest ->
+      headMentions = match head with
+        Right v -> isVar k v
+        Left _ -> false
+      if headMentions || List.any (isVar k) args then "other" else go (k + 1) rest
+    e -> if mentions k e then "other" else "no-resume"
+  match body with
+    AName (Left (Reference.Builtin "jumpCont")) [Var 0] rest -> if mentions 1 rest then "other" else go 0 rest
+    _ -> go 0 body
+
+{{ warp's translation of a term's ANF into its ops, with one addition for measuring: every arm of a request match reports its shape ({internal.build.Op.tailShape}) through `Debug.trace`, as the ability, the constructor and the shape. }}
+internal.build.Op.anfToOps :
+  ANormal
+  ->{TypeCtx, Exception, ModuleCtx, Warp} [Op
+    (List.Nonempty Segment)]
+internal.build.Op.anfToOps anf =
+  use List ++ :+ size
+  use Nat == >
+  use Op Direct Indirect
+  use WarpError raise
+  use internal.build.Segment fromANF
+  booleanID = fromTypeLink! (typeLink Boolean)
+  partial ref n = match TermRecord.signature (emitTerm ref) with
+    SigIndirect arity -> arity > n
+    SigDirect arity -> arity > n
+  charID = fromTypeLink! (typeLink Char)
+  go ops = cases
+    ALit lit -> ops :+ Direct (litToDirectOp lit)
+    ABLit lit -> ops :+ Direct (litToDirectOp lit)
+    AApp (FComb ref) vars ->
+      record = emitTerm ref
+      op =
+        match TermRecord.signature record with
+          SigIndirect arity| arity > size vars  ->
+            Direct (DName (Left record) vars)
+          SigDirect arity
+            | arity > size vars   ->
+              Direct (DName (Left record) vars)
+            | arity == size vars  -> Direct (DApp record vars)
+          _ -> Indirect (IApp (Left record) vars)
+      ops :+ op
+    AApp (FVar var) vars ->
+      ops :+ Indirect (IApp (Right var) vars)
+    AApp (FCon ref idx) []| ref === booleanID  ->
+      ops :+ Direct (DBoolean (idx == 1))
+    AApp (FCon ref idx) vars ->
+      emitName (Con ref idx) DataConstructor
+      ops :+ Direct (DCon (idGlobal ref) idx vars)
+    AApp (FReq ref idx) vars ->
+      emitName (Con ref idx) EffectConstructor
+      ops :+ Indirect (IReq (idGlobal ref) idx vars)
+    AApp (FPrim (Left BLDS)) vars -> ops :+ Direct (DSeq vars)
+    AApp fn vars ->
+      raise "Unsupported application form" (AApp fn vars)
+    AFrc var -> ops :+ Indirect (IFrc var)
+    AVar var -> ops :+ Direct (DVar var)
+    AMatch var (MatchRequest abilities default) ->
+      use List map
+      abilities' =
+        abilities
+          |> (map cases
+            (ref, arms) ->
+              ( idGlobal ref
+              , arms
+                  |> (map cases
+                    (con, (params, body)) ->
+                      match body with
+                        AShift var body ->
+                          _ = Debug.trace "tail-resumptive arm" (ref, con, tailShape partial body)
+                          (con, size params, fromANF body)
+                        _ ->
+                          raise
+                            "Expected top level of a request match arm to be a shift"
+                            body)
+              ))
+      default' = fromANF default
+      ops :+ Indirect (IMatchRequest var abilities' default')
+    AMatch var branched ->
+      branched' =
+        match branched with
+          MatchData ref arms default
+            | ref === booleanID  ->
+              (cons, alts) =
+                List.partition
+                  (cases (ctor, _) -> ctor == 1) arms
+              con =
+                match cons with
+                  [(_, ([], con))] -> con
+                  _ ->
+                    default
+                      |> (getOrElse' do
+                        raise
+                          "No consequent for boolean match"
+                          anf)
+              alt =
+                match alts with
+                  [(_, ([], alt))] -> alt
+                  _ ->
+                    default
+                      |> (getOrElse' do
+                        raise
+                          "No alternate for boolean match" anf)
+              BBoolean var (fromANF con) (fromANF alt)
+            | otherwise          ->
+              arms' =
+                arms
+                  |> (List.map cases
+                    (con, (params, body)) ->
+                      (con, size params, fromANF body))
+              default' = Optional.map fromANF default
+              BData var (idGlobal ref) arms' default'
+          MatchNumeric ref arms default
+            | ref === charID  ->
+              arms' =
+                arms |> (List.map cases
+                  (char, body) ->
+                    text = Char.toText (fromNat.impl char)
+                    (stringGlobal text, text, fromANF body))
+              default' = Optional.map fromANF default
+              BText var arms' default'
+            | otherwise       ->
+              arms' = arms |> List.map (Tuple.second fromANF)
+              default' = Optional.map fromANF default
+              BNumeric var (idGlobal ref) arms' default'
+          MatchText arms default ->
+            arms' =
+              arms
+                |> (List.map cases
+                  (text, body) ->
+                    (stringGlobal text, text, fromANF body))
+            default' = Optional.map fromANF default
+            BText var arms' default'
+          branched ->
+            raise
+              "Unsupported (legacy?) branch variant" branched
+      op = match toDirect branched' with
+        Some direct -> Direct (DMatch direct)
+        None        -> Indirect (IMatch branched')
+      ops :+ op
+    ALet _ [_] value body -> go (go ops value) body
+    anf@(ALet _ _ _ _) ->
+      raise "Unsupported multi-value let?" anf
+    anf@(AShift _ _) ->
+      raise "Unexpected shift outside request match arm" anf
+    AName (Left record) vars body ->
+      go
+        (ops :+ Direct (DName (Left (emitTerm record)) vars))
+        body
+    AName (Right var) vars body ->
+      go (ops :+ Direct (DName (Right var) vars)) body
+    anf@(AHnd abilities var body) ->
+      abilityIds = List.map idGlobal abilities
+      match go [] body with
+        Direct child +: rest ->
+          raise
+            "Expected child of AHnd to be indirect (likely AFrc)"
+            anf
+        Indirect child +: rest ->
+          ops :+ Indirect (IHnd abilityIds var child) ++ rest
+        _ ->
+          bug "Impossible: Op.anfToOps produced an empty list"
+  go [] anf
+
+
+---
+{{
+How a request-match arm ends, as phase 4 of the review plan asks: whether it could take a tail-resumptive path, resuming its continuation once in tail position, with no other use of it.
+
+`body` is what follows the arm's `AShift`, where the continuation is variable 0 (variables are de Bruijn indices). An arm that uses its continuation first names `resume`, the builtin `jumpCont` applied to it: inside, `resume` is variable 0 and the raw continuation variable 1, which must then not be used again. The walk follows `resume` into a closure that captures it once (the old variable must then go unused), since `do resume x` becomes such a closure. The answer is one of:
+- `resume`: the arm ends `resume x`;
+- `handle-resume`: it ends `handle resume x with h`: under a handler, it applies `resume`, or forces a closure that captured `resume` once (which is how `handle resume x with h` compiles);
+- `tail-call-with-resume`: it ends with a call, in tail position, that passes `resume` once as an argument, which is how a recursive handler written `go state resume` re-handles: the callee handles it (Proscenium's render handler and ink's reconcile handler are written this way);
+- `no-resume`: the continuation is never used, as in an abort;
+- `other`: anything else, such as resuming twice, storing the continuation, or resuming before more work.
+
+A `match` along the way (often just the destructuring of a tuple) qualifies when every branch does.
+}}
+internal.build.Op.tailShape : ANormal -> Text
+internal.build.Op.tailShape body =
+  use Nat + ==
+  isVar k = cases Var v -> v == k
+  funcMentions k = cases
+    FVar v -> isVar k v
+    FCont v -> isVar k v
+    _ -> false
+  mentions k = cases
+    AApp f vars -> funcMentions k f || List.any (isVar k) vars
+    AFrc v -> isVar k v
+    AVar v -> isVar k v
+    AHnd _ v rest -> isVar k v || mentions k rest
+    ALet _ mems value rest -> mentions k value || mentions (k + List.size mems) rest
+    ALit _ -> false
+    ABLit _ -> false
+    AMatch v branched -> isVar k v || branchedMentions k branched
+    AName head vars rest ->
+      headMentions = match head with
+        Right v -> isVar k v
+        Left _ -> false
+      headMentions || List.any (isVar k) vars || mentions (k + 1) rest
+    AShift _ rest -> mentions (k + 1) rest
+  armsMention k arms = List.any (cases (_, (mems, armBody)) -> mentions (k + List.size mems) armBody) arms
+  defaultMentions k = cases
+    Some d -> mentions k d
+    None -> false
+  branchedMentions k = cases
+    MatchData _ arms d -> armsMention k arms || defaultMentions k d
+    MatchIntegral arms d -> List.any (cases (_, b) -> mentions k b) arms || defaultMentions k d
+    MatchNumeric _ arms d -> List.any (cases (_, b) -> mentions k b) arms || defaultMentions k d
+    MatchRequest abilities d -> List.any (cases (_, arms) -> armsMention k arms) abilities || mentions k d
+    MatchSum arms -> armsMention k arms
+    MatchText arms d -> List.any (cases (_, b) -> mentions k b) arms || defaultMentions k d
+  countIn k vars = List.size (List.filter (isVar k) vars)
+  go k = cases
+    AApp (FVar v) args | isVar k v && Boolean.not (List.any (isVar k) args) -> "resume"
+    AFrc v | isVar k v -> "resume"
+    AHnd _ h (AApp (FVar v) args) | isVar k v && Boolean.not (isVar k h) && Boolean.not (List.any (isVar k) args) -> "handle-resume"
+    AHnd _ h (AFrc v) | isVar k v && Boolean.not (isVar k h) -> "handle-resume"
+    AApp (FComb _) args | countIn k args == 1 -> "tail-call-with-resume"
+    AApp (FVar f) args | Boolean.not (isVar k f) && (countIn k args == 1) -> "tail-call-with-resume"
+    ALet _ mems value rest -> if mentions k value then "other" else go (k + List.size mems) rest
+    AMatch v branched | Boolean.not (isVar k v) ->
+      shapes = match branched with
+        MatchData _ arms d -> List.map (cases (_, (mems, b)) -> go (k + List.size mems) b) arms List.++ (Optional.toList d |> List.map (go k))
+        MatchSum arms -> List.map (cases (_, (mems, b)) -> go (k + List.size mems) b) arms
+        MatchIntegral arms d -> List.map (cases (_, b) -> go k b) arms List.++ (Optional.toList d |> List.map (go k))
+        MatchNumeric _ arms d -> List.map (cases (_, b) -> go k b) arms List.++ (Optional.toList d |> List.map (go k))
+        MatchText arms d -> List.map (cases (_, b) -> go k b) arms List.++ (Optional.toList d |> List.map (go k))
+        MatchRequest _ _ -> ["other"]
+      qualifying = List.filter (shape -> shape !== "other" && shape !== "no-resume") shapes
+      if List.size qualifying == List.size shapes then List.head qualifying |> Optional.getOrElse "no-resume"
+      else if List.all (shape -> shape === "no-resume") shapes then "no-resume"
+      else "other"
+    AName (Left _) args rest | countIn k args == 1 ->
+      if mentions (k + 1) rest then "other" else go 0 rest
+    AName head args rest ->
+      headMentions = match head with
+        Right v -> isVar k v
+        Left _ -> false
+      if headMentions || List.any (isVar k) args then "other" else go (k + 1) rest
+    e -> if mentions k e then "other" else "no-resume"
+  match body with
+    AName (Left (Reference.Builtin "jumpCont")) [Var 0] rest -> if mentions 1 rest then "other" else go 0 rest
+    _ -> go 0 body
+
+{{ warp's translation of a term's ANF into its ops, with one addition for measuring: every arm of a request match reports its shape ({internal.build.Op.tailShape}) through `Debug.trace`, as the ability, the constructor and the shape. }}
+internal.build.Op.anfToOps :
+  ANormal
+  ->{TypeCtx, Exception, ModuleCtx, Warp} [Op
+    (List.Nonempty Segment)]
+internal.build.Op.anfToOps anf =
+  use List ++ :+ size
+  use Nat == >
+  use Op Direct Indirect
+  use WarpError raise
+  use internal.build.Segment fromANF
+  booleanID = fromTypeLink! (typeLink Boolean)
+  charID = fromTypeLink! (typeLink Char)
+  go ops = cases
+    ALit lit -> ops :+ Direct (litToDirectOp lit)
+    ABLit lit -> ops :+ Direct (litToDirectOp lit)
+    AApp (FComb ref) vars ->
+      record = emitTerm ref
+      op =
+        match TermRecord.signature record with
+          SigIndirect arity| arity > size vars  ->
+            Direct (DName (Left record) vars)
+          SigDirect arity
+            | arity > size vars   ->
+              Direct (DName (Left record) vars)
+            | arity == size vars  -> Direct (DApp record vars)
+          _ -> Indirect (IApp (Left record) vars)
+      ops :+ op
+    AApp (FVar var) vars ->
+      ops :+ Indirect (IApp (Right var) vars)
+    AApp (FCon ref idx) []| ref === booleanID  ->
+      ops :+ Direct (DBoolean (idx == 1))
+    AApp (FCon ref idx) vars ->
+      emitName (Con ref idx) DataConstructor
+      ops :+ Direct (DCon (idGlobal ref) idx vars)
+    AApp (FReq ref idx) vars ->
+      emitName (Con ref idx) EffectConstructor
+      ops :+ Indirect (IReq (idGlobal ref) idx vars)
+    AApp (FPrim (Left BLDS)) vars -> ops :+ Direct (DSeq vars)
+    AApp fn vars ->
+      raise "Unsupported application form" (AApp fn vars)
+    AFrc var -> ops :+ Indirect (IFrc var)
+    AVar var -> ops :+ Direct (DVar var)
+    AMatch var (MatchRequest abilities default) ->
+      use List map
+      abilities' =
+        abilities
+          |> (map cases
+            (ref, arms) ->
+              ( idGlobal ref
+              , arms
+                  |> (map cases
+                    (con, (params, body)) ->
+                      match body with
+                        AShift var body ->
+                          _ = Debug.trace "tail-resumptive arm" (ref, con, tailShape body)
+                          (con, size params, fromANF body)
+                        _ ->
+                          raise
+                            "Expected top level of a request match arm to be a shift"
+                            body)
+              ))
+      default' = fromANF default
+      ops :+ Indirect (IMatchRequest var abilities' default')
+    AMatch var branched ->
+      branched' =
+        match branched with
+          MatchData ref arms default
+            | ref === booleanID  ->
+              (cons, alts) =
+                List.partition
+                  (cases (ctor, _) -> ctor == 1) arms
+              con =
+                match cons with
+                  [(_, ([], con))] -> con
+                  _ ->
+                    default
+                      |> (getOrElse' do
+                        raise
+                          "No consequent for boolean match"
+                          anf)
+              alt =
+                match alts with
+                  [(_, ([], alt))] -> alt
+                  _ ->
+                    default
+                      |> (getOrElse' do
+                        raise
+                          "No alternate for boolean match" anf)
+              BBoolean var (fromANF con) (fromANF alt)
+            | otherwise          ->
+              arms' =
+                arms
+                  |> (List.map cases
+                    (con, (params, body)) ->
+                      (con, size params, fromANF body))
+              default' = Optional.map fromANF default
+              BData var (idGlobal ref) arms' default'
+          MatchNumeric ref arms default
+            | ref === charID  ->
+              arms' =
+                arms |> (List.map cases
+                  (char, body) ->
+                    text = Char.toText (fromNat.impl char)
+                    (stringGlobal text, text, fromANF body))
+              default' = Optional.map fromANF default
+              BText var arms' default'
+            | otherwise       ->
+              arms' = arms |> List.map (Tuple.second fromANF)
+              default' = Optional.map fromANF default
+              BNumeric var (idGlobal ref) arms' default'
+          MatchText arms default ->
+            arms' =
+              arms
+                |> (List.map cases
+                  (text, body) ->
+                    (stringGlobal text, text, fromANF body))
+            default' = Optional.map fromANF default
+            BText var arms' default'
+          branched ->
+            raise
+              "Unsupported (legacy?) branch variant" branched
+      op = match toDirect branched' with
+        Some direct -> Direct (DMatch direct)
+        None        -> Indirect (IMatch branched')
+      ops :+ op
+    ALet _ [_] value body -> go (go ops value) body
+    anf@(ALet _ _ _ _) ->
+      raise "Unsupported multi-value let?" anf
+    anf@(AShift _ _) ->
+      raise "Unexpected shift outside request match arm" anf
+    AName (Left record) vars body ->
+      go
+        (ops :+ Direct (DName (Left (emitTerm record)) vars))
+        body
+    AName (Right var) vars body ->
+      go (ops :+ Direct (DName (Right var) vars)) body
+    anf@(AHnd abilities var body) ->
+      abilityIds = List.map idGlobal abilities
+      match go [] body with
+        Direct child +: rest ->
+          raise
+            "Expected child of AHnd to be indirect (likely AFrc)"
+            anf
+        Indirect child +: rest ->
+          ops :+ Indirect (IHnd abilityIds var child) ++ rest
+        _ ->
+          bug "Impossible: Op.anfToOps produced an empty list"
+  go [] anf
