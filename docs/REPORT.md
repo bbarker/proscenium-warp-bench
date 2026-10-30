@@ -1930,6 +1930,42 @@ What this says:
   - **One lookup of `document`.** `global "document"` goes through the boxed glue, and
     looking it up per node made 30,000 extra crossings for 1,000 rows.
 
+### One-shot continuations: what resumes twice
+
+The author hopes native wasm stack switching will let warp drop its CPS paths, at the
+cost of multi-shot continuations. So the question for these libraries is whether anything
+resumes a continuation twice.
+
+**The guard** (`@dfreeman/warp/guard-one-shot`, from `perf-r7`) makes every continuation
+warp captures one-shot. `shift::continue`, which runs on every resume, overwrites its
+first data slot once it has read it. A second resume of the same continuation then
+fails a cast and traps. It catches every handler in the program: Proscenium's, ink's,
+base's and the app's.
+- **A handler that resumes twice** (`tests.guard.twice`) traps under the guard, and
+  passes without it.
+- **Proscenium and ink resume nothing twice.** Proscenium `perf-r7-guard` is `perf-r7` on
+  the guarded warp. Under it:
+  - the rows table matches Leptos over 200 random steps on two seeds;
+  - the meals page matches over 120 steps on two seeds, with no page errors;
+  - the cards page matches round 7's markup at every step;
+  - every operation of the rows, meals and cards timing suites completes.
+- **`app.Session`,** the one candidate found by reading, stores `Yield.run`'s
+  continuation and resumes it once. Its three callers each thread the session through
+  once, and the browser's `flush` is never re-entered, since an action schedules a
+  microtask.
+- **What does resume twice is base's `Each`,** nondeterminism, multi-shot by design.
+  warp's own suite traps under the guard in `Each.count.tests` and in `Random` tests built
+  on `test.prop`, which samples with `Each.rangeClosed`, each time after 36 passing tests.
+  The harness stops at the first trap, so the rest of the suite was not inventoried.
+- **Proscenium's and ink's own tests** run natively in UCM, not on warp, so the guard does
+  not reach them.
+
+So one-shot stack switching is enough for these UI libraries. A program using `Each`
+would keep a CPS fallback for that handler. The handlers that are safe can be told
+apart syntactically, as `docs/TailResumptive.md` marks tail-resumptive ones: each
+clause uses `resume` at most once and never stores it. `Yield.run` fails that check
+because its `resume` escapes into data, although it is resumed once.
+
 ### Next experiments, by expected payoff
 
 Re-ranked on 2026-10-30. Two earlier items are dropped: ahead-of-time unboxing, which

@@ -112,9 +112,11 @@ separately.
 ## Risks and what to check
 
 - **Multi-shot continuations:** none is created on the direct path. Handlers that call
-  `resume` more than once, or store it, are never marked. As far as we found, nothing in
-  ink or Proscenium resumes twice. The one candidate is `app.Session`, which stores the
-  continuation of `Yield.run` as a value, and `Yield.run`'s handler would not be marked.
+  `resume` more than once, or store it, are never marked. Nothing in ink or Proscenium
+  resumes twice, measured with every captured continuation made one-shot (warp
+  `guard-one-shot`; the report's "One-shot continuations"). `app.Session` stores the
+  continuation of `Yield.run` as a value and resumes it once, but `Yield.run`'s handler
+  would not be marked, since its `resume` escapes. base's `Each` does resume twice.
 - **Handler state:** the frame's handler field becomes mutable. Anything that copies
   frames (`attachFrame`) has to copy the current handler, not the one the frame was built
   with.

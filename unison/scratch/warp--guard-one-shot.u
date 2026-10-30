@@ -1,0 +1,122 @@
+{{
+warp's `shift`, with a guard that makes every captured continuation one-shot, for finding out whether a program resumes a continuation twice.
+
+`shift` captures the rest of the computation as a `Continuation` whose data is three values: the current frame and the handler's frame, each boxed as a `Foreign`, and the continuation to return to. `shift::continue` reads them when the continuation is resumed. Here it then overwrites the first with the third, which is not a `Foreign`. A second resume of the same continuation casts it to a `Foreign`, which traps with an illegal cast. One resume behaves as before.
+
+This is an experiment, not a change to offer: a multi-shot handler is valid Unison.
+}}
+internal.runtime.Helper.Shift.define :
+  FuncReference
+  -> FuncReference
+  -> Types
+  ->{TypeCtx, ModuleCtx} FuncReference
+internal.runtime.Helper.Shift.define continue findFrame = cases
+  types@(Types internalType valueType contSig) ->
+    use agg ref
+    use func *
+    use instr call
+    use ref cast
+    valuesType = internalType Values
+    frameType = internalType Frame
+    frameRef = ref frameType
+    foreignType = valueType VForeign
+    foreignRef = ref foreignType
+    contType = valueType VCont
+    contRef = ref contType
+    getArg args i =
+      local.get args
+      i32.const i
+      array.get valuesType
+    (attachFrame, defAttachFrame) =
+      declare.func.named
+        "attachFrame"
+        (param.named "oldStack" frameRef
+          * param.named "newStack" frameRef
+          * param.named "cutoffFrame" frameRef
+          => result frameRef)
+    use def func.named
+    defAttachFrame cases
+      (old, new, cutoff) ->
+        local.get old
+        local.get cutoff
+        ref.eq()
+        ifThen do
+          local.get new
+          return()
+        local.get old
+        struct.get frameType 0
+        asNonNull()
+        local.get new
+        local.get cutoff
+        call attachFrame
+        local.get old
+        struct.get frameType 1
+        local.get old
+        struct.get frameType 2
+        struct.new frameType
+    shift'continue =
+      func.named "shift::continue" contSig cases
+        (frame, args, value) ->
+          getArg args 0
+          cast foreignRef
+          struct.get foreignType 1
+          cast frameRef
+          local.get frame
+          getArg args 1
+          cast foreignRef
+          struct.get foreignType 1
+          cast frameRef
+          call attachFrame
+          getArg args 2
+          cast contRef
+          local.get args
+          i32.const 0
+          getArg args 2
+          array.set valuesType
+          local.get value
+          emitReturnCall continue
+    _ =
+      segment.elements
+        funcref declarative [do ref.func shift'continue]
+    shift = func.named "shift" (Shift.signature types) cases
+      (frame, abilityId, continue) ->
+        targetFrame = local.named "targetFrame" frameRef
+        local.get frame
+        local.get abilityId
+        call findFrame
+        asNonNull()
+        tee targetFrame
+        struct.get frameType 0
+        asNonNull()
+        pushTag VCont
+        ref.func shift'continue
+        pushTag VForeign
+        local.get frame
+        struct.new foreignType
+        pushTag VForeign
+        local.get targetFrame
+        struct.new foreignType
+        local.get continue
+        newFixed valuesType 3
+        struct.new contType
+    export.func "shift" shift
+    shift
+
+{{ A handler that resumes twice, which the guard should stop: `twice` runs the rest of `body` once for `true` and once for `false`. }}
+tests.guard.twice : ('{Ask Boolean} Nat) -> [Nat]
+tests.guard.twice body =
+  go = cases
+    { n } -> [n]
+    { Ask.ask -> resume } -> (handle resume true with go) List.++ (handle resume false with go)
+  handle body() with go
+
+tests.guard.choose : '{Ask Boolean} Nat
+tests.guard.choose = do if Ask.ask then 1 else 2
+
+{{ Under the guard, the multi-shot handler {tests.guard.twice} must trap, so this test is expected to fail (or hang the harness, which does not report a trap). }}
+tests.guard.multiShot : WasmTest
+tests.guard.multiShot = wasmTest "multi-shot resume is caught" do
+  test.ensureEqual [1, 2] (tests.guard.twice tests.guard.choose)
+
+tests.guard.suite : '{IO, Exception} [Result]
+tests.guard.suite = do WasmTest.run [tests.guard.multiShot]

@@ -173,6 +173,20 @@ The fuzz and your suite pass on it. Two harness issues, found on the way: the ha
 waits forever instead of reporting a failure on the native side of a
 `wasmTestWithChannel` test, or a JS exception inside wasm.
 
+## One-shot continuations
+
+You hoped stack switching would let warp drop CPS, at the cost of multi-shot
+continuations.
+- **The test:** warp `guard-one-shot` makes every captured continuation one-shot, so a
+  second resume traps.
+- **The UI libraries:** under it, the rows, meals and cards apps pass every consistency
+  check and every timing suite, so nothing in Proscenium or ink resumes twice.
+  `app.Session` stores a continuation, but resumes it once.
+- **What does trap is base's `Each`,** directly and through `test.prop`.
+
+So one-shot stack switching is enough for these libraries, with CPS kept for a handler
+that resumes twice.
+
 ## A floor for a tree without ink
 
 Before building a tree behind Proscenium's API, we measured how fast one could be with no

@@ -363,6 +363,21 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/proscenium/perf-r7-mini> compile bench.mini.rowsh.build target/unison/frontend-bench/rows-build-minih4
 ```
 
+- [ ] One-shot continuations, an experiment: warp `guard-one-shot` makes a second resume
+      of any captured continuation trap, and Proscenium `perf-r7-guard` runs the apps on it:
+
+```ucm
+@dfreeman/warp/perf-r7> branch /guard-one-shot
+@dfreeman/warp/guard-one-shot> load unison/scratch/warp--guard-one-shot.u
+@dfreeman/warp/guard-one-shot> update
+@dfreeman/proscenium/perf-r7> branch /perf-r7-guard
+@dfreeman/proscenium/perf-r7-guard> fork @dfreeman/warp/guard-one-shot: lib.dfreeman_warp_guard
+@dfreeman/proscenium/perf-r7-guard> upgrade dfreeman_warp_r7f dfreeman_warp_guard
+@dfreeman/proscenium/perf-r7-guard> compile bench.rowsfg.build target/unison/frontend-bench/rows-build-guard
+@dfreeman/proscenium/perf-r7-guard> compile bench.meals.build target/unison/frontend-bench/meals-build-guard
+@dfreeman/proscenium/perf-r7-guard> compile bench.cards.s400i.build target/unison/frontend-bench/cards-400-build-guard
+```
+
 Suggested `history.comment` lines:
 
 - ink/perf: `keyed reconcile in O(n log n) by longest increasing run, new children move with a moved predecessor; compute_ lets a message re-run only the computation owning its cell`
@@ -382,3 +397,5 @@ Suggested `history.comment` lines:
 - warp/offer-3-text: `Text by code point, as Unison counts and orders it: size, take, drop, uncons, unsnoc, reverse, toCharList, indexOf and pattern steps; CompareStrings as a code point loop, fixing text matches; tests.builtins.textFuzz`
 - warp/perf-r7-142: `Text by code point, as on offer-3-text, with the wasm Text builtins of round 7 rewritten as code point loops`
 - proscenium/perf-r7-142: `on warp perf-r7-142 with Text by code point`
+- warp/guard-one-shot: `experiment: shift::continue poisons its data after the first resume, so a second resume of any continuation traps`
+- proscenium/perf-r7-guard: `perf-r7 on warp guard-one-shot, to show that nothing resumes a continuation twice`
