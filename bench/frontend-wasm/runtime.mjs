@@ -14,10 +14,17 @@
 // Playwright is `playwright-core` from node_modules (`npm install` at the repo
 // root, or PLAYWRIGHT_CORE=<path>) driving the
 // devShell's Chromium (CHROMIUM_BIN).
+//
+// BENCH_COUNT=1 counts instead of timing: every function a wasm module imports
+// from JS and every export JS calls is wrapped, and each operation reports how
+// often each was called, with the JS import (if any) that was running when an
+// export was called. The `wasm:js-string` builtins are compiled into the module
+// and are not counted. The wrappers slow everything down, so the times are not
+// kept; the counts go to results/boundary-<suite>.json.
 
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
-import { readFile, appendFile, stat } from "node:fs/promises";
+import { readFile, appendFile, stat, writeFile } from "node:fs/promises";
 import { extname, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cpus, loadavg } from "node:os";
@@ -67,8 +74,54 @@ function implementations(app) {
   };
 }
 
+const COUNTING = process.env.BENCH_COUNT === "1";
+
+// Installed before the page's script when counting. An import is labelled by
+// its name when the name is readable (`##Nat.toText`), and otherwise (warp's
+// FFI imports are keyed by hash) by the start of its source.
+const COUNTER = `
+window.__counts = {};
+const running = [];
+const labelOf = (module, name, fn) => /^[\\x20-\\x7e]+$/.test(name) ? module + ':' + name
+  : module + ':ffi ' + String(fn).replace(/\\s+/g, ' ').replace(/^\\(?[^)]*\\)? ?=> ?\\{? ?/, '').slice(0, 90);
+const bump = (key) => { window.__counts[key] = (window.__counts[key] ?? 0) + 1; };
+const wrapImports = (imports) => Object.fromEntries(Object.entries(imports ?? {}).map(([module, members]) => [module,
+  Object.fromEntries(Object.entries(members).map(([name, value]) => {
+    if (typeof value !== 'function') return [name, value];
+    const label = 'import ' + labelOf(module, name, value);
+    return [name, function (...args) { bump(label); running.push(label); try { return value.apply(this, args); } finally { running.pop(); } }];
+  }))]));
+// A module rewritten by instrument.nu exports its site counters as memory.
+let siteCounters = null;
+const wrapExports = (instance) => (siteCounters ??= instance.exports.__counts ?? null, { exports: Object.fromEntries(Object.entries(instance.exports).map(([name, value]) =>
+  [name, typeof value !== 'function' ? value : (...args) => {
+    bump('export ' + name + (running.length ? ' <- ' + running[running.length - 1] : ' <- JS'));
+    return value(...args);
+  }])) });
+const instantiate = WebAssembly.instantiate.bind(WebAssembly);
+const instantiateStreaming = WebAssembly.instantiateStreaming.bind(WebAssembly);
+WebAssembly.instantiateStreaming = async (source, imports, options) => {
+  const result = await instantiateStreaming(source, wrapImports(imports), options);
+  return { module: result.module, instance: wrapExports(result.instance) };
+};
+WebAssembly.instantiate = async (source, imports, options) => {
+  const result = await instantiate(source, wrapImports(imports), options);
+  return result instanceof WebAssembly.Instance ? wrapExports(result) : { module: result.module, instance: wrapExports(result.instance) };
+};
+window.__takeCounts = () => { const counts = window.__counts; window.__counts = {}; return counts; };
+window.__takeSites = () => {
+  if (!siteCounters) return null;
+  const view = new Uint32Array(siteCounters.buffer);
+  const sites = {};
+  view.forEach((count, site) => { if (count) sites[site] = count; });
+  view.fill(0);
+  return sites;
+};
+`;
+
 function page(script) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>bench</title>
+${COUNTING ? `<script>${COUNTER}</script>` : ""}
 <style>.danger { background: #fdd; }
 .hidden { display: none; }
 .day { display: inline-block; vertical-align: top; width: 13rem; margin: 0 0.25rem; }
@@ -226,6 +279,15 @@ const round = (value) => Math.round(value * 100) / 100;
 async function runImplementation(browser, base, name, path, operations, iterations) {
   const samples = {};
   const add = (key, value) => { (samples[key] ??= []).push(value); };
+  // With BENCH_COUNT, each operation's counts from the last iteration, and
+  // the site counters of a module instrument.nu rewrote, under `sites`.
+  const counts = {};
+  const takeCounts = async (operation, tab) => {
+    if (!COUNTING) return;
+    counts[operation] = await tab.evaluate(() => window.__takeCounts?.() ?? {});
+    const sites = await tab.evaluate(() => window.__takeSites?.() ?? null);
+    if (sites) (counts.sites ??= {})[operation] = sites;
+  };
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     const context = await browser.newContext();
     const tab = await context.newPage();
@@ -239,9 +301,11 @@ async function runImplementation(browser, base, name, path, operations, iteratio
     if (failed) throw new Error(`${name}: ${failed}`);
     await tab.waitForSelector("#app", { timeout: 120000 });
     add("load (ready)", await tab.evaluate(() => window.__ready));
+    await takeCounts("load (ready)", tab);
     await tab.evaluate(HELPERS);
     for (const [operation, body] of operations) {
       const result = await tab.evaluate(`(async () => { ${body} })()`);
+      await takeCounts(operation, tab);
       if (operation.startsWith("memory")) {
         const metrics = (await client.send("Performance.getMetrics")).metrics;
         const heap = metrics.find((metric) => metric.name === "JSHeapUsedSize").value;
@@ -263,6 +327,7 @@ async function runImplementation(browser, base, name, path, operations, iteratio
     if (errors.length) throw new Error(`${name}: ${errors.join("; ")}`);
     await context.close();
   }
+  if (COUNTING) return counts;
   return Object.fromEntries(Object.entries(samples).map(([key, values]) => [key, {
     median: round(median(values)), min: round(Math.min(...values)), max: round(Math.max(...values)),
   }]));
@@ -297,7 +362,11 @@ async function main() {
   }
   const line = { suite, iterations, at: new Date().toISOString(), load: loadavg().map(round), cpus: cpus().length,
     chromium: version, results };
-  await appendFile(join(here, "results", "runtime.jsonl"), JSON.stringify(line) + "\n");
+  if (COUNTING) {
+    await writeFile(join(here, "results", `boundary-${suite}.json`), JSON.stringify({ ...line, kind: "boundary counts" }, null, 1) + "\n");
+  } else {
+    await appendFile(join(here, "results", "runtime.jsonl"), JSON.stringify(line) + "\n");
+  }
   console.log(JSON.stringify(line, null, 2));
 }
 

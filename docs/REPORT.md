@@ -173,6 +173,20 @@ repeat it.
     lands about 10 ms later.
   - The shipped code is 62 KB brotli against 86 KB. A release build after an edit is
     about the same at this size (5.8 s against 6.4 s).
+- **What the remaining cost is made of (2026-10-30, after the author's review).**
+  Counting at the boundary and inside the module, creating 1,000 rows:
+  - **Crossings:** about as many calls into JS as Leptos makes (36,000 against 32,000),
+    but 161,000 calls back from warp's JS glue into wasm, where Leptos has 1,000.
+  - **Allocations:** 4,572 a row: argument arrays 38%, data 17%, boxed numbers 10%,
+    continuations 8%.
+  - **Unboxing:** wasm-opt removes 39% of the number boxes but only 8% of all
+    allocations.
+  - **Ability operations:** 41 a row, each capturing a continuation, which warp does not
+    special-case.
+
+  The fixes, in order: unwrap arguments in wasm instead of in the glue; allocate less in
+  generic and partial application; compile handlers that resume once, at the end, as
+  direct calls; finish `==` and `compare` in wasm. See "Measured attribution".
 - **A Leptos limit we may hit:** the 1,600-card benchmark app puts 80 page components in
   one `view!`, and mounting it overflowed wasm's default 1 MB stack. This happened in both
   dev and release builds, as `memory access out of bounds`, and an 8 MB stack fixed it.
@@ -1275,6 +1289,134 @@ The report's claims about boxing and call dispatch are corrected above, and the
 experiments below are re-ranked. The plan that follows from the review is
 `/var/workspace/ProsceniumWarpReviewPlan.md` (outside this repository).
 
+### Measured attribution
+
+Added 2026-10-30. The profile could say where time went, but not what allocates or why
+calls go through `apply*`, because Chromium's profilers do not see inside wasm. Two
+counters answer that, both for the round 5 build (`perf-r5i`). Neither changes warp.
+
+- **At the boundary** (`BENCH_COUNT=1 node bench/frontend-wasm/runtime.mjs <suite> 1`,
+  summarised by `boundary.nu`). Every function a module imports from JS, and every export
+  JS calls, is wrapped and counted per operation. Each call back into wasm is labelled
+  with the JS import that was running when it was made. This covers Leptos too.
+  `wasm:js-string` builtins are compiled into the module, so they are not counted.
+- **Inside the module** (`instrument.nu`, summarised by `sites.nu`). A copy of the module
+  gets a counter before:
+  - each function's body;
+  - each `struct.new*` and `array.new*`;
+  - each `call_ref`;
+  - each call to warp's runtime helpers (`apply*`, `continue`, `shift`, `hnd`, ...).
+
+  This was done on warp's debug-named build ("debug" config: names, devtools hooks),
+  unoptimised and after wasm-opt with warp's flags plus `-g` to keep the names.
+
+Counts are deterministic, so one run each (`results/boundary-*.json`,
+`results/sites-*.json`).
+
+#### At the boundary
+
+| Operation | Leptos: wasm→JS calls | Leptos: JS→wasm calls | warp: wasm→JS calls | warp: JS→wasm calls |
+| --- | --- | --- | --- | --- |
+| rows, create 1,000 | 32,004 | 1,003 | 36,038 | 161,193 |
+| rows, update every 10th | 101 | 2 | 505 | 3,620 |
+| rows, select | 3 | 3 | 9 | 49 |
+| rows, swap | 7 | 4 | 38 | 196 |
+| meals, plan the week | 3,695 | 90 | 4,168 | 18,322 |
+| meals, shuffle a meal | 1,675 | 176 | 353 | 1,638 |
+| meals, wave | 2 | 2 | 255 | 1,040 |
+| cards-400, page ready | 652,075 | 805 | 10,870 | 46,692 |
+
+warp makes about as many calls into JS as Leptos when it builds a list, but its JS glue
+then calls back into wasm about 4.5 times for each one. The glue reads each argument out
+of its Unison box (`Text_getValue`, `Foreign_getValue`) and wraps the result (`Foreign`,
+`Unit`), each through an exported getter. A `setAttribute` is one call from wasm and
+three back. That is 161,186 of the 197,231 crossings in creating 1,000 rows, where Leptos
+has 1,000. Unwrapping in wasm and passing the raw `externref` and string would remove
+nearly all of them.
+
+The JS builtins that are called at all:
+
+- **`Universal.==`.** Round 1's wasm equality handles each kind of value only against
+  the same kind. A plain `Function` compared with a `Closure` falls through to JS, as do
+  `Float`, `Foreign`, `Request`, `Continuation` and `Quote`. ink's skip check compares
+  body closures, so this is 4,011 calls when creating 1,000 rows, 400 for "update every
+  10th", and 70 to 226 per meals edit. Each one makes eight calls back into wasm.
+- **`Text.indexOf`,** 240 per run of the meals search.
+- **`Nat.toText`,** once per row label.
+
+Two findings about the apps themselves:
+- **Leptos's cards page** makes 652,075 calls into JS to mount 400 cards. That is why it is
+  ready in 273 ms against warp's 89.
+- **The meals page's search filters all 240 recipes again on every root re-render,**
+  "wave" included, so its region is not being skipped. That is a Proscenium-side
+  question, below.
+
+#### Inside the module
+
+Creating 1,000 rows, per row, after wasm-opt (unoptimised in brackets):
+
+| Per row | Count |
+| --- | --- |
+| function entries | 4,000 (6,739) |
+| … of continuation-passing code | 1,466 (1,784) |
+| … of direct-style code | 2,534 (4,955) |
+| indirect calls (`call_ref`: closures, continuation pieces) | 716 (720) |
+| generic applications (`apply*`, `apply0`–`8`) | 421 (421) |
+| ability operations (`shift`) | 41 (41) |
+| allocations | **4,572** (4,987) |
+| … `Values` arrays (arguments, continuation data, closure captures) | 1,745 |
+| … `Data` (records, tuples, `Optional`, constructors) | 796 |
+| … boxed `Nat`/`Int` (merged into one type by wasm-opt) | 436 (709) |
+| … `Continuation` | 376 |
+| … `List` (tree nodes) | 328 |
+| … `Closure` | 309 |
+| … `Foreign` (boxed JS values) | 135 |
+
+What this says about the review's points:
+
+- **Unboxing.** wasm-opt does unbox the easy cases, as the author says: boxed numbers fall
+  39%, from 709 a row to 436. But all allocations fall only 8%, from 4,987 a row to
+  4,572, because most are not number boxes. They are argument arrays, data and
+  continuations. What is left of the boxes includes `Universal.compare`'s `Int` result
+  and `Nat.+`'s sum, still allocated on most calls. wasm-opt's inlining cuts function
+  entries by 41%.
+- **Calls.** Known calls to ability-free functions are direct, as the author says. Direct
+  code is 63% of function entries. The other 37% is continuation-passing code: every
+  function that may perform an ability, which in a UI built on ink means most of it.
+  Each of its returns goes through a continuation.
+
+  There are 421 generic applications a row, 716 indirect calls, and 309 partial
+  applications (`name`, which allocates a closure each time). These come from
+  higher-order code, ink's and Proscenium's, passing closures around.
+- **Handlers.** Each ability operation calls `shift`, which finds its handler by walking
+  the frame list (`findFrame`). It then allocates four objects to capture the
+  continuation. Resuming copies every frame between the operation and the handler
+  (`attachFrame`). ink's handler then re-installs itself with `hnd`, five more
+  allocations. warp special-cases none of this. A row performs 41 ability operations.
+
+The functions that allocate most in the optimised module are:
+
+- **`apply*`:** 352,000 per 1,000 rows, argument arrays.
+- **`name`:** 309,000, partial applications.
+- **`Universal.compare`:** 166,000, its boxed result.
+- **`shift`:** 164,000.
+- **`seqMkBranch`:** 138,000, list tree nodes.
+- **`List.viewl` and `List.:+`:** 128,000 and 100,000.
+
+Compiled Unison code allocates the rest, 2.75 million of the 4.57 million.
+
+The meals page has the same shape, with 54,000–65,000 allocations per one-meal edit and
+397,000 to plan the week. Ranked by what they would remove:
+
+1. **The JS glue unwraps in wasm:** 80% of boundary crossings.
+2. **Generic application and partial application allocate less:** 660 objects a row
+   between `apply*` and `name`.
+3. **Handlers that resume once, at the end, compile to direct calls:** `shift`'s and
+   `hnd`'s 9 allocations per operation, 41 operations a row, plus the frame walk and copy.
+4. **`Universal.compare` returns an unboxed result inside wasm, and `==` handles mixed
+   function kinds:** 166,000 allocations and 4,011 JS calls per 1,000 rows.
+5. **`Text.indexOf` and `Nat.toText` move into wasm.**
+
 ### Next experiments, by expected payoff
 
 Re-ranked on 2026-10-30. Two earlier items are dropped: ahead-of-time unboxing, which
@@ -1388,6 +1530,18 @@ BENCH_VARIANTS=r5i BENCH_IMPLS=leptos,warp-r5i node bench/frontend-wasm/runtime.
 nu bench/frontend-wasm/round5.nu perf-r5 r5   # then run the printed transcript with transcript.fork
 node bench/frontend-wasm/phases.mjs warp/rows-bare-r5t 5
 node bench/frontend-wasm/cards-check.mjs leptos/cards-400-release warp/cards-400-bare-r4 warp/cards-400-bare-r5
+# Measured attribution (2026-10-30): boundary counts, then site counts on instrumented copies
+BENCH_COUNT=1 BENCH_VARIANTS=r5i BENCH_IMPLS=leptos,warp-r5i node bench/frontend-wasm/runtime.mjs rows 1
+nu bench/frontend-wasm/boundary.nu rows
+ucm run.compiled target/unison/frontend-bench/rows-build-r5i.uc -- debug target/frontend-bench/warp/rows-debug-r5i
+wasm-opt -g target/frontend-bench/warp/rows-debug-r5i/rows-debug.wasm -o target/frontend-bench/warp/rows-debug-r5i/rows-debug.opt.wasm <warp's flags, as in bench.nu>
+nu bench/frontend-wasm/instrument.nu target/frontend-bench/warp/rows-debug-r5i/rows-debug.wasm target/frontend-bench/warp/rows-bare-r5iraw/rows-bare.opt.wasm
+nu bench/frontend-wasm/instrument.nu target/frontend-bench/warp/rows-debug-r5i/rows-debug.opt.wasm target/frontend-bench/warp/rows-bare-r5iopt/rows-bare.opt.wasm
+# (copy rows-debug.loader.js, minified, to both as rows-bare.loader.min.js)
+BENCH_COUNT=1 BENCH_VARIANTS=r5iraw,r5iopt BENCH_IMPLS=warp-r5iraw,warp-r5iopt node bench/frontend-wasm/runtime.mjs rows 1
+mv bench/frontend-wasm/results/boundary-rows.json bench/frontend-wasm/results/sites-rows.json
+nu bench/frontend-wasm/sites.nu rows
+nu bench/frontend-wasm/sites.nu rows --by-function --operation "create 1k" --top 20
 ```
 
 The round 5 build entries were compiled in the bench codebase with
