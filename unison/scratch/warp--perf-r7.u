@@ -649,6 +649,7 @@ ReleaseNotes =
     `wasm:js-string` builtins (`length`, `substring`), with no call into JS.
   * 2026-10-30: `Char.toText`, `Char.toNat`, `Char.fromNat`, `Text.uncons` and
     `Text.unsnoc` also run in wasm over `wasm:js-string`.
+  * 2026-10-30: `Text.repeat` and `Text.reverse` run in wasm too.
   }}
 
 {{
@@ -852,6 +853,166 @@ internal.runtime.replacements.unison_base.Text_uncons = Text_uncons.textSplit tr
 
 internal.runtime.replacements.unison_base.Text_unsnoc : Replacement
 internal.runtime.replacements.unison_base.Text_unsnoc = Text_uncons.textSplit false
+
+{{
+`hnd`, warp's `handle`: pushes a frame holding the handler, as a continuation (`hnd::continue`) over the handler and the current continuation, and returns the continuation for a normal return (`hnd::complete`). That one carries no data, so it is one shared global instead of a continuation and an empty array allocated on every `handle`, two of `hnd`'s five allocations.
+}}
+internal.runtime.Helper.Handle.define :
+  FuncReference
+  -> FuncReference
+  -> Types
+  ->{TypeCtx, ModuleCtx} FuncReference
+internal.runtime.Helper.Handle.define apply1 continue = cases
+  types@(Types internalType valueType contSig) ->
+    use agg ref
+    use def.func named
+    use ref cast
+    use struct new
+    valuesType = internalType Values
+    frameType = internalType Frame
+    funcRef = ref (valueType VFunc)
+    contType = valueType VCont
+    contRef = ref contType
+    getArg args i =
+      local.get args
+      i32.const i
+      array.get valuesType
+    hnd'continue = named "hnd::continue" contSig cases
+      (frame, args, value) ->
+        use local get
+        get frame
+        getArg args 1
+        cast contRef
+        getArg args 0
+        cast funcRef
+        get value
+        emitReturnCall apply1
+    hnd'complete = named "hnd::complete" contSig cases
+      (frame, _, value) ->
+        local.get frame
+        struct.get frameType 0
+        asNonNull()
+        local.get frame
+        struct.get frameType 2
+        local.get value
+        emitReturnCall continue
+    _ =
+      segment.elements
+        funcref
+        declarative
+        [do ref.func hnd'continue, do ref.func hnd'complete]
+    complete =
+      def.global (global.const contRef) do
+        pushTag VCont
+        ref.func hnd'complete
+        newFixed valuesType 0
+        new contType
+    hnd = named "hnd" (Handle.signature types) cases
+      (frame, abilities, handler, k) ->
+        use local get
+        use ref func
+        get frame
+        get abilities
+        pushTag VCont
+        func hnd'continue
+        get handler
+        get k
+        newFixed valuesType 2
+        new contType
+        new frameType
+        global.get complete
+    export.func "handle" hnd
+    hnd
+
+{{
+`Text.repeat n text` for warp's output, in wasm: `n` joins with the `wasm:js-string` `concat` builtin, which V8 builds as a rope, with no call into JS.
+}}
+internal.runtime.replacements.unison_base.Text_repeat : Replacement
+internal.runtime.replacements.unison_base.Text_repeat = wasmExpression 2 cases
+  runtime ->
+    use func *
+    concat = import.func "wasm:js-string" "concat" (param externref * param externref => result (abs.ref extern))
+    emptyText = stringGlobal ""
+    cases
+      env, vars ->
+        count = FuncCtx.local (VN I64)
+        text = FuncCtx.local externref
+        joined = FuncCtx.local externref
+        pushTag VText
+        env1 = pushUnboxedVar VNat env (List.unsafeAt 0 vars)
+        local.set count
+        env2 = pushUnboxedVar VText env1 (List.unsafeAt 1 vars)
+        local.set text
+        global.get emptyText
+        local.set joined
+        block cases
+          exit ->
+            instr.loop cases
+              again ->
+                local.get count
+                i64.eqz()
+                brIf exit
+                local.get joined
+                local.get text
+                instr.call concat
+                local.set joined
+                local.get count
+                i64.const 1
+                i64.sub()
+                local.set count
+                br again
+        local.get joined
+        asNonNull()
+        struct.new (Runtime.valueType VText runtime)
+        env2
+
+{{
+`Text.reverse` for warp's output, in wasm: the UTF-16 code units in reverse order, from the `wasm:js-string` `charCodeAt`, `fromCharCode` and `concat` builtins, as the JS version's `split('').reverse()` did, with no call into JS.
+}}
+internal.runtime.replacements.unison_base.Text_reverse : Replacement
+internal.runtime.replacements.unison_base.Text_reverse = wasmExpression 1 cases
+  runtime ->
+    use func *
+    length = import.func "wasm:js-string" "length" (param externref => result i32)
+    charCodeAt = import.func "wasm:js-string" "charCodeAt" (param externref * param i32 => result i32)
+    fromCharCode = import.func "wasm:js-string" "fromCharCode" (param i32 => result (abs.ref extern))
+    concat = import.func "wasm:js-string" "concat" (param externref * param externref => result (abs.ref extern))
+    emptyText = stringGlobal ""
+    cases
+      env, vars ->
+        text = FuncCtx.local externref
+        index = FuncCtx.local i32
+        reversed = FuncCtx.local externref
+        pushTag VText
+        env' = pushUnboxedVar VText env (List.unsafeAt 0 vars)
+        local.tee text
+        instr.call length
+        local.set index
+        global.get emptyText
+        local.set reversed
+        block cases
+          exit ->
+            instr.loop cases
+              again ->
+                local.get index
+                i32.eqz()
+                brIf exit
+                local.get index
+                i32.const 1
+                i32.sub()
+                local.set index
+                local.get reversed
+                local.get text
+                local.get index
+                instr.call charCodeAt
+                instr.call fromCharCode
+                instr.call concat
+                local.set reversed
+                br again
+        local.get reversed
+        asNonNull()
+        struct.new (Runtime.valueType VText runtime)
+        env'
 
 ---
 

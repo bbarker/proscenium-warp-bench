@@ -716,6 +716,7 @@ ReleaseNotes =
     `wasm:js-string` builtins (`length`, `substring`), with no call into JS.
   * 2026-10-30: `Char.toText`, `Char.toNat`, `Char.fromNat`, `Text.uncons` and
     `Text.unsnoc` also run in wasm over `wasm:js-string`.
+  * 2026-10-30: `Text.repeat` and `Text.reverse` run in wasm too.
   * 2026-10-28: `Universal.compare` and `Universal.==` compare values of the
     same kind in wasm ({Universal_compare.defineCompareValues},
     {Universal_eq.defineEqValues}), and fall back to JS for the rest.
