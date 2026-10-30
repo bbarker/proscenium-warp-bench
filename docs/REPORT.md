@@ -1463,6 +1463,24 @@ The meals page has the same shape, with 54,000–65,000 allocations per one-meal
    function kinds:** 166,000 allocations and 4,011 JS calls per 1,000 rows.
 5. **`Text.indexOf` and `Nat.toText` move into wasm.**
 
+**Continuations by ability.** Each `shift` call sits in the handler that builds
+`resume`, and passes the handled ability's id, an import named after the ability type's
+hash. So the captures can be split by ability. In round 7's rows app
+(`results/sites-rows-r7h.json`), creating a row captures 41 continuations, at 4
+allocations each before frame copies:
+
+| Ability (handler) | Per row created | Update every 10th | Select |
+| --- | --- | --- | --- |
+| `Render` (Proscenium) | 13 | 800 | 6 |
+| `Incremental` (ink, two handlers) | 12 | 800 | 6 |
+| `Stream` (ink's delta emits) | 10 | 100 | 1 |
+| `UseCell` (Proscenium's cells) | 4 | 0 | 0 |
+| `Rows` (the app's provider) | 2 | 101 | 1 |
+| `Update`, `Suspend` | 0 | 102 | 4 |
+
+The `Incremental` and `Stream` rows, 22 of the 41, exist only because Proscenium runs on
+ink.
+
 ### Round 7: the boundary, after the review
 
 Added 2026-10-30, after "Measured attribution". The branches are
