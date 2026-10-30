@@ -1806,6 +1806,36 @@ reporting:
 A Unison failure inside wasm is reported. So the fuzz compares on the native side and
 sends the first difference back for the wasm side to fail on.
 
+#### Every builtin moved, in one table
+
+What each change to warp's builtins bought, from the measurements above. The rows app's
+"create 1,000" is the common yardstick. A round that made several changes is credited as
+a whole, since they were timed together.
+
+| Builtins | Now | Branch | Measured |
+| --- | --- | --- | --- |
+| `Universal.compare`, `Universal.==` | wasm, with the JS as fallback | `perf` (round 1) | With ink's keyed fix, 2–4 times faster on every rows operation than the ink fix alone |
+| `List`, all 14 primitives | wasm GC tree of 32-element arrays | `perf-r4` (round 4) | Round 4 as a whole: create 1,000 from 223.6 to 148.5 ms; a 9,000-operation differential fuzz passes |
+| `List.:+` in place | wasm | `perf-r5` | No measurable change; not offered |
+| 13 `JSValue` interop functions | JS, unboxed (`jsUnboxed`) | `perf-r7` | Crossings for create 1,000 from 197,231 to 32,046 (Leptos 33,007); create 1,000 91.5 to 86.5 ms, append 59.1 to 45.8 |
+| `==` of a function against a closure | wasm | `perf-r7` | 4,011 JS calls removed from create 1,000 |
+| results of `compare`, `==`, Boolean intrinsics, `()` | shared boxes | `perf-r7` | With the interop: allocations 4,572 to 4,356 a row |
+| `Nat.toText` | JS, unboxed | `perf-r7` | 80 to 40 ms a million calls (DSL 196, Unison 338) |
+| `Text.indexOf` | JS, unboxed, `Optional` in wasm | `perf-r7` | The meals search's 240 calls a run need no glue |
+| `Text.size`, `take`, `drop`, `uncons`, `unsnoc`, `repeat`, `reverse`; `Char.toText`, `toNat`, `fromNat` | wasm over `wasm:js-string` | `perf-r7` | Not hot in these apps; no change in time |
+| the same `Text` builtins, by code point; `CompareStrings`; `Text.<` and siblings | wasm loops over `charCodeAt` | `offer-3-text`, `perf-r7-142` | Correctness (the text fuzz passes); time to the DOM unchanged |
+| `hnd`'s completion (runtime, not a builtin) | one shared global | `perf-r7` | Allocations 4,356 to 4,198 a row |
+
+**Closed-world mode, before and after the boundary moved** ("Closed-world mode on a
+narrower boundary"):
+- **On the full boundary:** 0.2% smaller.
+- **With the exports only JS builtins used stripped:** 2.6% smaller under brotli, with 50
+  fewer types and 87 fewer functions.
+- **Speed:** unchanged either way.
+
+The boundary was not what held wasm-opt back: values stay boxed in generic arrays and are
+called through `call_ref`.
+
 ### A floor for a tree without ink
 
 `docs/ProsceniumTree.md` proposes a tree of Proscenium's own in place of ink. Before
