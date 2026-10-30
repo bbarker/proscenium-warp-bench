@@ -205,9 +205,15 @@ Against that app on ink:
 - **Select:** costs the same, 0.6 ms.
 - **Swap and remove:** a third of ink's time.
 - **Creating rows:** 12–36% less.
-- **Update every 10th:** slower, 9.0 against 5.8 ms. The cells and the redraw registry
-  are maps keyed by paths of `Any` segments, so every lookup compares lists. Interning
-  paths as numbers is the next change.
+- **Update every 10th:** at first slower, 9.0 against 5.8 ms, because every update looked
+  paths up in maps. Two fixes followed:
+  - each cell now holds its value in a cell of its own and names its owner;
+  - each changed owner is redrawn directly, with no dirty set.
+
+  Now it is faster on the tree in every operation (load 16–29, interleaved):
+  - update every 10th: 6.6 against 8.3 ms;
+  - select: 0.9 against 1.4;
+  - create 10,000 rows: 597 against 830.
 
 Effects and cleanups aren't in it yet, so the cards and meals apps don't run on it.
 

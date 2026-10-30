@@ -183,8 +183,13 @@ That app runs on it unchanged:
   are maps keyed by paths, and comparing paths of `Any` segments dominates. A number per
   path from one global map was tried. It cut the compares to a third, but cost every
   node of a full render a lookup, and creating rows got 17–31% slower. So the open
-  question below, path or stable id, has a measured answer: a stable id, but only if it
-  comes without a lookup per node, carried in the mounted tree.
+  question below, path or stable id, has a measured answer.
+- **Paths work, if an update never looks them up twice.** Each cell holds its value in a
+  cell of its own and names its owner when it is made. A message then changes the value
+  in place, and the owner is redrawn directly, with no dirty set and no owner search.
+  That cut update every 10th's compares to 42,048, and the fine-grained app became faster
+  on the tree than on ink in every operation: update every 10th 6.6 against 8.3 ms,
+  select 0.9 against 1.4.
 
 Not in the prototype yet:
 - `Effect`, `onCleanup`, namespaces, and payloads other than a click's. So the cards and

@@ -2057,8 +2057,48 @@ What this says:
     allocations, 113 to 132 ms. Creating 10,000 went from 660 to 867 ms, and the heap
     at 10,000 rows from 144 to 171 MB. Update every 10th barely moved, 10.5 to 9.9 ms.
 
-  A stable id has to come without a lookup per node, for example carried in the
-  mounted tree from one render to the next. That is the next change.
+  A stable id has to come without a lookup per node.
+
+#### Cells that name their owner
+
+The change that worked keeps paths but removes the lookups an update made:
+- **Cells:** each holds its value in a cell of its own, so a message changes it in place.
+  Each also records the path of its owner, the nearest element drawn around the
+  `useCell`, when it is made.
+- **Redraws:** a message's owner is then known directly, and every changed owner is
+  redrawn on its own. There is no set of changed paths and no owner search. A cell at the
+  root renders from the root first.
+
+If a full render skips an element whose cell changed, that element's own redraw follows,
+so nothing is left stale. Both rows apps still match Leptos over 200 steps on two seeds.
+
+The counters (`results/sites-rows-tree.json`) for update every 10th:
+- **`compareValues` calls:** 148,679 before, 42,048 after.
+- **Allocations:** 260,688 before, 176,771 after, against ink's 349,244.
+- **Select:** 1,139 allocations against ink's 2,878.
+- **Creating rows:** no costlier than before.
+
+Timed interleaved, medians of 9, load 16–29, to the DOM
+(`results/round7-tree-final-rows.json`):
+
+| Operation (ms) | Leptos | Fine-grained rows on ink (round 7) | **Fine-grained rows on the tree** | Plain rows on ink | **Plain rows on the tree** |
+| --- | --- | --- | --- | --- | --- |
+| create 1,000 rows | 32.6 | 121.9 | **108.4** | 110.6 | **64.6** |
+| replace 1,000 rows | 38.5 | 135.0 | **75.7** | 93.8 | **63.5** |
+| append 1,000 rows | 29.1 | 81.3 | **79.6** | 73.0 | **57.7** |
+| update every 10th row | 1.3 | 8.3 | **6.6** | 15.5 | **9.8** |
+| select a row | 0.7 | 1.4 | **0.9** | 5.4 | **4.2** |
+| swap two rows | 0.9 | 9.6 | **2.5** | 10.3 | **2.7** |
+| remove a row | 1.3 | 8.2 | **2.2** | 6.8 | **3.5** |
+| clear 2,000 rows | 24.3 | 51.9 | **25.6** | 26.9 | **25.3** |
+| create 10,000 rows | 236.2 | 829.9 | **597.2** | 637.7 | **402.9** |
+| clear 10,000 rows | 122.1 | 149.2 | **91.5** | 88.6 | 90.8 |
+| JS heap at 10,000 rows (MB) | 9.6, plus 21.8 linear | 154.9 | 145.2 | 123.5 | **95.5** |
+
+**Round 7's own rows app is now faster on the tree than on ink in every operation, with
+the same source.** The load was high from another session's build, so the absolute times
+are inflated. The runs were interleaved, so the comparison holds. The plain app, which
+keeps everything in one root cell, gains most on creating rows.
 - **The cost of registering owners** is a map entry per row, which the build of 10,000
   rows pays: its heap is 144 MB here against 94 MB for the plain app on the tree.
 
