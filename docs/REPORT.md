@@ -2046,8 +2046,19 @@ What this says:
   now looks owners' prefixes up in a set, which took the ratio to ink from 1.55 to 1.35
   at load 19–30 (`round7-treefg-rows.json`).
 
-  The next change is to intern each path as a number when it is first seen, so those
-  maps compare integers.
+  **Numbering each path, tried and not kept** (`round7-treefg-interned-rows.json`, load
+  23–27):
+  - **What was tried:** each path was given a number the first time it was seen, from
+    one global map of parent and segment.
+  - **What it bought:** update every 10th called `compareValues` 55,448 times instead of
+    148,679.
+  - **What it cost:** every node of a full render looked its path up in that map, and
+    each new node inserted one. Creating 1,000 rows went from 3.2 to 4.5 million
+    allocations, 113 to 132 ms. Creating 10,000 went from 660 to 867 ms, and the heap
+    at 10,000 rows from 144 to 171 MB. Update every 10th barely moved, 10.5 to 9.9 ms.
+
+  A stable id has to come without a lookup per node, for example carried in the
+  mounted tree from one render to the next. That is the next change.
 - **The cost of registering owners** is a map entry per row, which the build of 10,000
   rows pays: its heap is 144 MB here against 94 MB for the plain app on the tree.
 

@@ -180,8 +180,11 @@ That app runs on it unchanged:
 - **Swap and remove:** a third of ink's time.
 - **Creating rows:** 12–36% less.
 - **Update every 10th:** slower, 9.0 against 5.8 ms. Its cells, dirty marks and registry
-  are maps keyed by paths, and comparing paths of `Any` segments dominates. The design
-  should give each path a number when it is first seen.
+  are maps keyed by paths, and comparing paths of `Any` segments dominates. A number per
+  path from one global map was tried. It cut the compares to a third, but cost every
+  node of a full render a lookup, and creating rows got 17–31% slower. So the open
+  question below, path or stable id, has a measured answer: a stable id, but only if it
+  comes without a lookup per node, carried in the mounted tree.
 
 Not in the prototype yet:
 - `Effect`, `onCleanup`, namespaces, and payloads other than a click's. So the cards and
