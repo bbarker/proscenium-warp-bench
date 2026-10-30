@@ -2265,6 +2265,28 @@ apart syntactically, as `docs/TailResumptive.md` marks tail-resumptive ones: eac
 clause uses `resume` at most once and never stores it. `Yield.run` fails that check
 because its `resume` escapes into data, although it is resumed once.
 
+### Stack switching, timed at the mechanism
+
+The author hopes wasm stack switching will let warp drop its CPS paths. Before building a
+warp option that emits `cont.new`, `resume` and `suspend` (waltz has none of them yet),
+`bench/stack-switching/` times the mechanism. A body performs an operation a million
+times, and a one-shot handler answers each one. It is written three ways in
+`handlers.wat`:
+
+| One-shot handler, per operation (Chromium 149, `--js-flags=--experimental-wasm-wasmfx`, medians of 15) | ns |
+| --- | --- |
+| stack switching: `suspend` to the handler, `resume` back | 53–55 |
+| continuation passing, one allocation per operation | 2.5 |
+| continuation passing, ten small allocations, about warp's `shift` and re-handle today | 57 |
+
+Node 24's V8 13.6 accepts the continuation types but not the instructions.
+
+**In today's experimental V8, a switch costs as much as warp's current continuation
+passing, and twenty times a lean continuation.** So a stack-switching backend would not
+make these UIs faster yet. What would is fewer allocations per operation: phase 4's
+tail-resumptive path, or a leaner `shift` and `hnd`. Multi-shot handlers are not the
+obstacle either. Nothing in Proscenium or ink resumes twice ("One-shot continuations").
+
 ### Next experiments, by expected payoff
 
 Re-ranked on 2026-10-30. Two earlier items are dropped: ahead-of-time unboxing, which
