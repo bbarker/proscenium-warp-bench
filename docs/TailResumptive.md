@@ -74,6 +74,33 @@ is what lets the optimisation apply to UI code:
 - **Proscenium's `node` clause** performs ink's `Incremental`, and the frames between it
   and the user's code handle only `Render`. The check passes.
 
+## Where it goes in warp's compiler
+
+From warp's code generator (`internal.build.Op.IndirectOp`):
+
+- **An operation** (`IReq.emit`) builds the request's data, the ability's constructor and
+  arguments, and calls the `dispatch` helper with the current frame and continuation.
+- **A handler** (`IMatchRequest.emit`) tests whether the value it got is a request,
+  matches its ability and constructor, and binds the arm's parameters. It then calls
+  `shift` (`buildResumeLocal`) to build `resume` before running the arm. So the capture
+  happens on the handler's side, once the request has reached it.
+- **`handle e with h`** (`IHnd.emit`) pushes the frame through `hnd`. It also allocates a
+  fresh `Ids` array of the handled abilities on every `handle`, though that array is a
+  constant of the site.
+
+So the direct path needs four things:
+1. a second compilation of each qualifying handler's arms, recognised from the arm's
+   shape: its body is `resume e`, or `handle (resume e) with h'`;
+2. a flag on the handler's frame, which `dispatch` checks before taking the general path;
+3. a mutable handler field in the frame;
+4. for `handle (resume e) with h'`, replacing the frame's handler with `h'` and
+   continuing with `e`, rather than pushing a new frame.
+
+Without the last, every operation would add a handler frame to the stack, and
+`findFrame`'s walk would grow with each one. That is several days of compiler work. The
+smaller change that was made, a shared completion continuation in `hnd` (below), takes
+2 of `hnd`'s 5 allocations off every `handle`.
+
 ## What it would save
 
 Per operation: the 4 allocations of `shift`, the frame copies of `attachFrame`, the
