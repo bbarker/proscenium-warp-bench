@@ -207,6 +207,18 @@ repeat it.
     - lighter when ready;
     - 2.8 times the memory with 1,000 rows;
     - about the same size.
+- **Without ink, the floor is close to Leptos** ("A floor for a tree without ink"). A
+  keyed virtual DOM in plain Unison, about 200 lines with no ink and no Proscenium, runs
+  the rows app on warp r7f:
+  - **Creating 1,000 rows:** 94 ms against round 7's 150 and Leptos's 76, with 1,041
+    allocations a row instead of 4,198.
+  - **Creating 10,000 rows:** 756 against 1,177 and 812.
+  - **Memory at 10,000 rows:** 44 MB against 152.
+  - **Interactions:** within a few ms of both.
+  - **With an ability:** written through an `Html` ability with one handler, one
+    operation per element, it costs 13% more to create 1,000 rows and 24% more for
+    10,000. Proscenium has two handlers today.
+  - **Size:** the module is 18 KB brotli. warp builds it in 0.24 s.
 - **A Leptos limit we may hit:** the 1,600-card benchmark app puts 80 page components in
   one `view!`, and mounting it overflowed wasm's default 1 MB stack. This happened in both
   dev and release builds, as `memory access out of bounds`, and an 8 MB stack fixed it.
@@ -1726,6 +1738,100 @@ Two things found on the way:
   and `concat` return a non-null `(ref extern)`, and a module declaring `externref` fails
   to instantiate. warp's test runner then waits forever for an answer.
 
+### A floor for a tree without ink
+
+`docs/ProsceniumTree.md` proposes a tree of Proscenium's own in place of ink. Before
+building that behind Proscenium's API, we measured the floor: how fast a UI on warp can
+be with no ink and no handler per element. `bench.mini`, on Proscenium `perf-r7-mini`
+(from `perf-r7`, on warp r7f), is a keyed virtual DOM in about 200 lines of plain Unison:
+
+- **The view:** plain data. An element is a tag, a key, attributes, listeners (an event and
+  a message) and children. A node can also be a text node or a memo. A memo is a key, an
+  input and a view, and it is redrawn only when its input differs, as Elm's `Html.Lazy`
+  is.
+- **The update:** Elm's. A listener sends its message, `update` makes a new model, and
+  the new view is patched onto the DOM at once.
+- **Children:**
+  - matched by position when no keys changed;
+  - otherwise, the common prefix and suffix are patched in place;
+  - what is left goes through a keyed reconcile, with ink's longest-increasing-run
+    `stableIndices` deciding the moves.
+- **The app:** the rows app is written twice on the same renderer, as data (`mini`) and
+  through an `Html` ability whose one handler collects the nodes (`mini-h`). The second
+  has the shape of Proscenium's `Render`, with one handler where Proscenium today has its
+  own and ink's.
+
+Both pass `consistency.mjs` against Leptos over 100 random steps.
+
+Timed with `BENCH_INTERLEAVE=1`, medians of 11, until the frame after the DOM shows the
+end state (`results/round7-mini-rows.json`). The load was 15–23 from another session's
+build, so the absolute times are higher than in other tables. The ratios are what to
+read.
+
+| Operation (ms) | Leptos | Round 7 | Floor, data | Floor, one handler |
+| --- | --- | --- | --- | --- |
+| create 1,000 rows | 76.2 | 150.1 | **93.8** | 106.1 |
+| replace 1,000 rows | 79.3 | 158.7 | **72.0** | 81.5 |
+| append 1,000 rows | 89.5 | 131.0 | **98.3** | 109.2 |
+| update every 10th row | 14.2 | 22.0 | **16.8** | 21.5 |
+| select a row | 10.9 | 7.5 | **10.5** | 11.6 |
+| swap two rows | 20.3 | 17.1 | **24.6** | 19.2 |
+| remove a row | 21.3 | 21.1 | **17.4** | 18.9 |
+| clear 2,000 rows | 24.7 | 46.7 | **18.7** | 21.2 |
+| create 10,000 rows | 812.3 | 1,177.0 | **756.0** | 940.2 |
+| clear 10,000 rows | 111.2 | 144.7 | **80.9** | 86.7 |
+| JS heap at 10,000 rows (MB) | 9.6, plus 21.8 linear | 151.9 | **43.8** | 43.7 |
+
+The counters, for creating 1,000 rows (`results/sites-rows-mini.json`,
+`results/boundary-rows-mini.json`):
+
+| | Round 7 | Floor, data | Floor, one handler |
+| --- | --- | --- | --- |
+| allocations a row | 4,198 | 1,041 | 1,431 |
+| handler operations a row | 41 | 0 | 11 |
+| generic applications a row | 421 | 61 | 138 |
+| boundary crossings | 32,046 | 33,003 | 33,003 |
+
+And for the build:
+
+| | Round 7 | Floor, data | Floor, one handler | Leptos |
+| --- | --- | --- | --- | --- |
+| module, brotli | 139 KB | 18 KB | 19 KB | 47 KB |
+| loader, brotli | 11.6 KB | 11.6 KB | 11.6 KB | 5.4 KB |
+| terms warp emits | 2,884 | 179 | 193 | |
+| warp's build | 3.26 s | 0.24 s | 0.27 s | |
+
+What this says:
+
+- **Most of round 7's remaining cost is the libraries.** On the same warp, the same
+  runtime and the same DOM calls, dropping ink and Proscenium cuts allocations by three
+  quarters and creation time by about 37%. That puts creation at 1.2 times Leptos, and
+  replacing, clearing and creating 10,000 rows ahead of it.
+- **An ability-based API costs something, but not most of it.** One handler, one
+  operation per element: 11 operations and 390 allocations a row more than plain data,
+  13–24% more time to create rows. That is the shape a tree of Proscenium's own behind
+  the current API would have. It is still well ahead of round 7's 41 operations a row.
+  Phase 4's tail-resumptive path would narrow it further: these 11 operations are exactly
+  the shape it targets.
+- **The size is Proscenium's and ink's code.** Without them, the module is 18 KB brotli
+  and warp emits 179 terms in a quarter of a second. Round 7's 139 KB is mostly the two
+  libraries.
+- **A virtual DOM still pays for the whole view on every message.** A click rebuilds all
+  1,000 memo nodes and compares their inputs:
+  - **select a row:** 70,000 allocations against round 7's 2,900, since round 7's
+    `Selector` touches two rows;
+  - **swap two rows:** the general keyed path, at 768,000 allocations against 362,000.
+
+  The times stay close because paint dominates both, but a Proscenium tree should keep
+  `Keyed` and `Selector`'s targeted updates rather than diff a whole view.
+- **Three things the floor needed:**
+  - **The memo.** Without it, every interaction took 45–70 ms (`results/round7-mini-first-rows.json`,
+    load 9–11).
+  - **The two fast paths for children.** Without the prefix and suffix trim, removing a
+    row allocated 829,000; with it, 76,000.
+  - **One lookup of `document`.** `global "document"` goes through the boxed glue, and
+    looking it up per node made 30,000 extra crossings for 1,000 rows.
+
 ### Next experiments, by expected payoff
 
 Re-ranked on 2026-10-30. Two earlier items are dropped: ahead-of-time unboxing, which
@@ -1736,7 +1842,8 @@ boundary (round 7).
 1. **Proscenium: a tree of its own instead of ink,** the author's preferred direction,
    behind the current API (`docs/ProsceniumTree.md`). Each element is two ability
    operations today, one Proscenium's and one ink's, plus ink's records, keys and `Delta`
-   values.
+   values. The floor ("A floor for a tree without ink") says this is where most of the
+   remaining cost is: a quarter of the allocations, and 37% less time to create rows.
 2. **warp: continuation handling.**
    - Compile a handler that resumes once, in tail position, as a direct call.
      ink's `reconcile.handler`, which every element goes through, has that shape: it

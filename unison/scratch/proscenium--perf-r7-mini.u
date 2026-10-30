@@ -1,0 +1,387 @@
+{{
+A view as plain data, for {bench.mini.run}: an element (tag, key, attributes, listeners, children), a text node, or a memo. A listener is an event name and the message it sends. A key, when it is not `""`, identifies an element among its siblings across renders, as a `region` key does in Proscenium.
+
+A memo (key, input, view) is drawn from its view, and redrawn only when its input differs from the last render's, as Elm's `Html.Lazy` is and as Proscenium skips an element whose body is the same closure. Its view is not called at all while the input is unchanged.
+}}
+type bench.mini.VNode msg
+  = El Text Text [(Text, Text)] [(Text, msg)] [bench.mini.VNode msg]
+  | Txt Text
+  | Memo Text Any (() -> bench.mini.VNode msg)
+
+{{ A rendered {type bench.mini.VNode}: the same shape, with each element's and text node's DOM node. }}
+type bench.mini.Mounted msg
+  = MEl JSValue Text Text [(Text, Text)] [(Text, msg)] [bench.mini.Mounted msg]
+  | MTxt JSValue Text
+  | MMemo Text Any (bench.mini.Mounted msg)
+
+{{ The DOM node of a rendered node. }}
+bench.mini.domOf : bench.mini.Mounted msg -> JSValue
+bench.mini.domOf = cases
+  MEl node _ _ _ _ _ -> node
+  MTxt node _        -> node
+  MMemo _ _ inner    -> bench.mini.domOf inner
+
+{{ Creates the DOM for `vnode` in `document`, with a click (or other) listener per listener that sends its message to `dispatch`. }}
+bench.mini.create : JSValue -> (msg ->{JS} ()) -> bench.mini.VNode msg ->{JS} bench.mini.Mounted msg
+bench.mini.create document dispatch = cases
+  Txt text -> MTxt (JSValue.invokeText1 "createTextNode" text document) text
+  Memo key input view -> MMemo key input (bench.mini.create document dispatch view())
+  El tag key attrs listeners children ->
+    node = JSValue.invokeText1 "createElement" tag document
+    setAttr = cases (name, value) -> JSValue.invokeText2_ "setAttribute" name value node
+    listen = cases (event, msg) -> JSValue.invokeTextVal_ "addEventListener" event (JSValue.callback1_ (_ -> dispatch msg)) node
+    List.foreach setAttr attrs
+    List.foreach listen listeners
+    mounted = List.map (bench.mini.create document dispatch) children
+    append child = JSValue.invoke1_ "appendChild" (bench.mini.domOf child) node
+    List.foreach append mounted
+    MEl node tag key attrs listeners mounted
+
+{{ Sets the attributes of `node` that differ between `old` and `new`, and removes those `new` lacks. }}
+bench.mini.patchAttrs : JSValue -> [(Text, Text)] -> [(Text, Text)] ->{JS} ()
+bench.mini.patchAttrs node old new =
+  lookup name attrs = List.find (pair -> at1 pair Text.== name) attrs |> Optional.map at2
+  setChanged = cases
+    (name, value) -> if lookup name old === Some value then () else JSValue.invokeText2_ "setAttribute" name value node
+  removeMissing = cases
+    (name, _) -> if Optional.isSome (lookup name new) then () else JSValue.invokeText1_ "removeAttribute" name node
+  if old === new then ()
+  else
+    List.foreach setChanged new
+    List.foreach removeMissing old
+
+{{
+Brings `old`, rendered under `parent`, in line with `new`, and returns what is rendered. A memo whose input is unchanged is kept as it is.
+
+An element whose tag or listeners changed is replaced. Listeners are attached when an element is created, which is enough when, as in a keyed list, an element's messages do not change.
+}}
+bench.mini.patch : JSValue -> (msg ->{JS} ()) -> bench.mini.Mounted msg -> bench.mini.VNode msg ->{JS} bench.mini.Mounted msg
+bench.mini.patch document dispatch old new =
+  use Text ==
+  replace _ =
+    replacement = bench.mini.create document dispatch new
+    JSValue.invoke1_ "replaceWith" (bench.mini.domOf replacement) (bench.mini.domOf old)
+    replacement
+  match (old, new) with
+    (MTxt node oldText, Txt text) ->
+      if oldText == text then old
+      else
+        JSValue.setPropertyText "nodeValue" text node
+        MTxt node text
+    (MMemo _ input inner, Memo key input' view) ->
+      if input === input' then old
+      else MMemo key input' (bench.mini.patch document dispatch inner view())
+    (MEl node tag _ attrs listeners children, El tag' key' attrs' listeners' children') ->
+      if (tag == tag') && (listeners === listeners') then
+        bench.mini.patchAttrs node attrs attrs'
+        children'' = bench.mini.patchChildren document dispatch node children children'
+        MEl node tag key' attrs' listeners' children''
+      else replace()
+    _ -> replace()
+
+{{ The key a rendered node was drawn under, `""` for none. }}
+bench.mini.Mounted.key : bench.mini.Mounted msg -> Text
+bench.mini.Mounted.key = cases
+  MEl _ _ key _ _ _ -> key
+  MMemo key _ _     -> key
+  MTxt _ _          -> ""
+
+{{ The key a view node asks for, `""` for none. }}
+bench.mini.VNode.key : bench.mini.VNode msg -> Text
+bench.mini.VNode.key = cases
+  El _ key _ _ _ -> key
+  Memo key _ _   -> key
+  Txt _          -> ""
+
+{{
+The children of {bench.mini.patch}, in three cases:
+
+* **No keys on either side:** matched by position, with new children appended and missing ones removed.
+* **The same keys in the same order:** matched by position, with nothing moved.
+* **Otherwise:** the children at the start and at the end whose keys match are patched where they are, and those in between go through {bench.mini.patchKeyed}. A removal, an insertion or an append then reconciles only what changed.
+}}
+bench.mini.patchChildren : JSValue -> (msg ->{JS} ()) -> JSValue -> [bench.mini.Mounted msg] -> [bench.mini.VNode msg] ->{JS} [bench.mini.Mounted msg]
+bench.mini.patchChildren document dispatch parent olds news =
+  use List :+ ++ +:
+  unkeyedOld mounted = bench.mini.Mounted.key mounted Text.== ""
+  unkeyedNew vnode = bench.mini.VNode.key vnode Text.== ""
+  byPosition acc olds' news' = match (olds', news') with
+    (old +: restOld, new +: restNew) -> byPosition (acc :+ bench.mini.patch document dispatch old new) restOld restNew
+    ([], new +: restNew) ->
+      mounted = bench.mini.create document dispatch new
+      JSValue.invoke1_ "appendChild" (bench.mini.domOf mounted) parent
+      byPosition (acc :+ mounted) [] restNew
+    (old +: restOld, []) ->
+      JSValue.invoke0_ "remove" (bench.mini.domOf old)
+      byPosition acc restOld []
+    ([], []) -> acc
+  sameKeys olds' news' = match (olds', news') with
+    (old +: restOld, new +: restNew) -> (bench.mini.Mounted.key old Text.== bench.mini.VNode.key new) && sameKeys restOld restNew
+    ([], []) -> true
+    _ -> false
+  sameKey old new =
+    key = bench.mini.Mounted.key old
+    (key Text.!= "") && (key Text.== bench.mini.VNode.key new)
+  takePrefix acc olds' news' = match (olds', news') with
+    (old +: restOld, new +: restNew) | sameKey old new -> takePrefix (acc :+ bench.mini.patch document dispatch old new) restOld restNew
+    _ -> (acc, olds', news')
+  takeSuffix acc olds' news' = match (olds', news') with
+    (restOld :+ old, restNew :+ new) | sameKey old new -> takeSuffix (bench.mini.patch document dispatch old new +: acc) restOld restNew
+    _ -> (acc, olds', news')
+  trimmed _ =
+    (prefix, oldMiddle, newMiddle) = takePrefix [] olds news
+    (suffix, oldMiddle', newMiddle') = takeSuffix [] oldMiddle newMiddle
+    middle =
+      if List.isEmpty oldMiddle' && List.isEmpty newMiddle' then []
+      else bench.mini.patchKeyed document dispatch parent (List.last prefix |> Optional.map bench.mini.domOf) oldMiddle' newMiddle'
+    prefix ++ middle ++ suffix
+  if List.all unkeyedOld olds && List.all unkeyedNew news then byPosition [] olds news
+  else if sameKeys olds news then byPosition [] olds news
+  else trimmed()
+
+{{
+The keyed reconcile of {bench.mini.patchChildren}, for the children after `previous` (the DOM node they follow, or `None` at the start of `parent`): children are matched by key (by position when the key is `""`), new ones created, and missing ones removed. The children whose old positions form a longest increasing run stay in place, and every other child is moved after its new predecessor (ink's `stableIndices`), which is the fewest moves.
+}}
+bench.mini.patchKeyed : JSValue -> (msg ->{JS} ()) -> JSValue -> Optional JSValue -> [bench.mini.Mounted msg] -> [bench.mini.VNode msg] ->{JS} [bench.mini.Mounted msg]
+bench.mini.patchKeyed document dispatch parent start olds news =
+  use Text ++
+  oldKey : Nat -> bench.mini.Mounted msg -> Text
+  oldKey index mounted = match bench.mini.Mounted.key mounted with
+    "" -> "#" ++ Nat.toText index
+    key -> key
+  newKey : Nat -> bench.mini.VNode msg -> Text
+  newKey index vnode = match bench.mini.VNode.key vnode with
+    "" -> "#" ++ Nat.toText index
+    key -> key
+  keyedOld = cases (mounted, index) -> (oldKey index mounted, (index, mounted))
+  oldByKey = List.indexed olds |> List.map keyedOld |> Map.fromList
+  keyedNew = cases (vnode, index) -> newKey index vnode
+  newKeys = List.indexed news |> List.map keyedNew
+  found = List.map (key -> Map.get key oldByKey) newKeys
+  render = cases
+    (vnode, Some (_, mounted)) -> bench.mini.patch document dispatch mounted vnode
+    (vnode, None)              -> bench.mini.create document dispatch vnode
+  rendered = List.zip news found |> List.map render
+  keep = Set.fromList newKeys
+  dropMissing = cases
+    (mounted, index) -> if Set.contains (oldKey index mounted) keep then () else JSValue.invoke0_ "remove" (bench.mini.domOf mounted)
+  List.indexed olds |> List.foreach dropMissing
+  stable = lib.dfreeman_ink_r5.Incremental.reconcile.stableIndices (List.map (Optional.map at1) found)
+  place previous = cases
+    [] -> ()
+    (mounted, isStable) +: rest ->
+      node = bench.mini.domOf mounted
+      if isStable then place (Some node) rest
+      else
+        match previous with
+          Some before -> JSValue.invoke1_ "after" node before
+          None -> JSValue.invoke1_ "prepend" node parent
+        place (Some node) rest
+  place start (List.zip rendered stable)
+  rendered
+
+{{
+Runs an app written as plain data, in the style of Elm: `view` turns the model into a {type bench.mini.VNode}, and a listener's message goes through `update` to a new model, whose view is patched onto the DOM at once. There is no ability per element, no ink, and no `Render` handler: this measures what warp's code costs for a UI built from data alone.
+}}
+bench.mini.run : JSValue -> model -> (msg -> model -> model) -> (model -> bench.mini.VNode msg) ->{JS} ()
+bench.mini.run root initial update view =
+  document = global "document"
+  state = JS.ref (initial, None)
+  dispatch : msg ->{JS} ()
+  dispatch msg =
+    (model, mounted) = Ref.read state
+    model' = update msg model
+    mounted' = match mounted with
+      Some previous -> bench.mini.patch document dispatch previous (view model')
+      None          -> bench.mini.create document dispatch (view model')
+    Ref.write state (model', Some mounted')
+  first = bench.mini.create document dispatch (view initial)
+  JSValue.invoke1_ "appendChild" (bench.mini.domOf first) root
+  Ref.write state (initial, Some first)
+
+{{ The rows benchmark's messages, one per button and per row link. }}
+type bench.mini.RowsMsg = Run | RunLots | Add | Update | Clear | Swap | Rotate | Select Nat | Remove Nat
+
+{{ The rows benchmark's model changes, the same as {bench.rows.ui}'s. }}
+bench.mini.rowsUpdate : bench.mini.RowsMsg -> bench.rows.Model -> bench.rows.Model
+bench.mini.rowsUpdate = cases
+  RowsMsg.Run          -> bench.rows.Model.create 1000
+  RowsMsg.RunLots      -> bench.rows.Model.create 10000
+  RowsMsg.Add          -> bench.rows.Model.append 1000
+  RowsMsg.Update       -> bench.rows.Model.updateEveryTenth
+  RowsMsg.Clear        -> bench.rows.Model.rows.set []
+  RowsMsg.Swap         -> bench.rows.Model.swapRows
+  RowsMsg.Rotate       -> bench.rows.Model.rotateInsert
+  RowsMsg.Select rowId -> bench.rows.Model.selected.set (Some rowId)
+  RowsMsg.Remove rowId -> bench.rows.Model.remove rowId
+
+{{ The rows benchmark's view as data, with {bench.rows.ui}'s markup: a keyed row per id, each a memo of the row and whether it is selected. }}
+bench.mini.rowsView : bench.rows.Model -> bench.mini.VNode bench.mini.RowsMsg
+bench.mini.rowsView model =
+  use Nat toText
+  button buttonId label msg = El "button" "" [("id", buttonId)] [("click", msg)] [Txt label]
+  selected = bench.rows.Model.selected model
+  cell className content = El "td" "" [("class", className)] [] content
+  link className msg label = El "a" "" [("class", className)] [("click", msg)] [Txt label]
+  rowElement r isSelected =
+    rowId = bench.rows.Row.id r
+    rowClass = if isSelected then "danger" else ""
+    El "tr" "" [("class", rowClass)] [] [cell "col-md-1" [Txt (toText rowId)], cell "col-md-4" [link "lbl" (RowsMsg.Select rowId) (bench.rows.Row.label r)], cell "col-md-1" [link "remove" (RowsMsg.Remove rowId) "x"], cell "col-md-6" []]
+  row r =
+    isSelected = selected === Some (bench.rows.Row.id r)
+    Memo (toText (bench.rows.Row.id r)) (Any (r, isSelected)) do rowElement r isSelected
+  buttons = El "div" "" [("class", "buttons")] [] [button "run" "Create 1,000 rows" RowsMsg.Run, button "runlots" "Create 10,000 rows" RowsMsg.RunLots, button "add" "Append 1,000 rows" RowsMsg.Add, button "update" "Update every 10th row" RowsMsg.Update, button "clear" "Clear" RowsMsg.Clear, button "swaprows" "Swap rows" RowsMsg.Swap, button "rotate" "Rotate and insert" RowsMsg.Rotate]
+  table = El "table" "" [("class", "table")] [] [El "tbody" "" [("id", "tbody")] [] (List.map row (bench.rows.Model.rows model))]
+  El "div" "" [("id", "app")] [] [buttons, table]
+
+{{ `run bench.mini.rows.build <bare|debug> <outDir>`: the rows benchmark on {bench.mini.run}, mounted on the page's body as {bench.build.app} mounts {bench.rows.ui}, written as `rows-<config>`. }}
+bench.mini.rows.build : '{IO, Exception} ()
+bench.mini.rows.build = do
+  use Text ++
+  start _ = bench.mini.run (global "document" :: "body") bench.rows.Model.initial bench.mini.rowsUpdate bench.mini.rowsView
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("rows-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+{{
+A view written with an ability rather than as data: each element, text node and memo is one operation, and {bench.mini.Html.collect}, one handler, turns them into {type bench.mini.VNode}s. This is the shape of Proscenium's `Render`, with one handler in place of Proscenium's and ink's two.
+}}
+ability bench.mini.Html msg where
+  element : Text -> Text -> [(Text, Text)] -> [(Text, msg)] -> '{bench.mini.Html msg} () -> ()
+  text : Text -> ()
+  memo : Text -> Any -> '{bench.mini.Html msg} () -> ()
+
+{{ The nodes `body` draws, in order. A memo's body is collected only when the memo is drawn, and its first node is the memo's. }}
+bench.mini.Html.collect : '{bench.mini.Html msg} () -> [bench.mini.VNode msg]
+bench.mini.Html.collect body =
+  use List :+
+  go acc = cases
+    { () } -> acc
+    { bench.mini.Html.element tag key attrs listeners children -> resume } ->
+      handle resume () with go (acc :+ El tag key attrs listeners (bench.mini.Html.collect children))
+    { bench.mini.Html.text content -> resume } ->
+      handle resume () with go (acc :+ Txt content)
+    { bench.mini.Html.memo key input view -> resume } ->
+      single _ = List.head (bench.mini.Html.collect view) |> Optional.getOrElse (Txt "")
+      handle resume () with go (acc :+ Memo key input single)
+  handle body () with go []
+
+{{ {bench.mini.rowsView} written with {type bench.mini.Html}. }}
+bench.mini.rowsHtml : bench.rows.Model -> '{bench.mini.Html bench.mini.RowsMsg} ()
+bench.mini.rowsHtml model = do
+  use Nat toText
+  use bench.mini.Html element text memo
+  button buttonId label msg = element "button" "" [("id", buttonId)] [("click", msg)] do text label
+  cell className body = element "td" "" [("class", className)] [] body
+  link className msg label = element "a" "" [("class", className)] [("click", msg)] do text label
+  rowElement r isSelected = do
+    rowId = bench.rows.Row.id r
+    element "tr" "" [("class", if isSelected then "danger" else "")] [] do
+      cell "col-md-1" do text (toText rowId)
+      cell "col-md-4" do link "lbl" (RowsMsg.Select rowId) (bench.rows.Row.label r)
+      cell "col-md-1" do link "remove" (RowsMsg.Remove rowId) "x"
+      cell "col-md-6" do ()
+  selected = bench.rows.Model.selected model
+  row r =
+    isSelected = selected === Some (bench.rows.Row.id r)
+    memo (toText (bench.rows.Row.id r)) (Any (r, isSelected)) (rowElement r isSelected)
+  element "div" "" [("id", "app")] [] do
+    element "div" "" [("class", "buttons")] [] do
+      button "run" "Create 1,000 rows" RowsMsg.Run
+      button "runlots" "Create 10,000 rows" RowsMsg.RunLots
+      button "add" "Append 1,000 rows" RowsMsg.Add
+      button "update" "Update every 10th row" RowsMsg.Update
+      button "clear" "Clear" RowsMsg.Clear
+      button "swaprows" "Swap rows" RowsMsg.Swap
+      button "rotate" "Rotate and insert" RowsMsg.Rotate
+    element "table" "" [("class", "table")] [] do
+      element "tbody" "" [("id", "tbody")] [] do
+        List.foreach row (bench.rows.Model.rows model)
+
+{{ `run bench.mini.rowsh.build <bare|debug> <outDir>`: {bench.mini.rows.build} with the view written as {bench.mini.rowsHtml}. }}
+bench.mini.rowsh.build : '{IO, Exception} ()
+bench.mini.rowsh.build = do
+  use Text ++
+  view model = List.head (bench.mini.Html.collect (bench.mini.rowsHtml model)) |> Optional.getOrElse (Txt "")
+  start _ = bench.mini.run (global "document" :: "body") bench.rows.Model.initial bench.mini.rowsUpdate view
+  match IO.getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("rows-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" start)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"
+
+---
+
+The first version, timed as `mini` on 2026-10-30: no memo, and every child list reconciled by key.
+
+{{
+Brings `old`, rendered under `parent`, in line with `new`, and returns what is rendered.
+
+Children are matched by key (by position when the key is `""`), new ones created, and missing ones removed. The children whose old positions form a longest increasing run stay in place, and every other child is moved after its new predecessor (ink's `stableIndices`), which is the fewest moves.
+
+An element whose tag or listeners changed is replaced. Listeners are attached when an element is created, which is enough when, as in a keyed list, an element's messages do not change.
+}}
+bench.mini.patch : (msg ->{JS} ()) -> bench.mini.Mounted msg -> bench.mini.VNode msg ->{JS} bench.mini.Mounted msg
+bench.mini.patch dispatch old new =
+  use Text ==
+  replace _ =
+    replacement = bench.mini.create dispatch new
+    JSValue.invoke1_ "replaceWith" (bench.mini.domOf replacement) (bench.mini.domOf old)
+    replacement
+  match (old, new) with
+    (MTxt node oldText, Txt text) ->
+      if oldText == text then old
+      else
+        JSValue.setPropertyText "nodeValue" text node
+        MTxt node text
+    (MEl node tag _ attrs listeners children, El tag' key' attrs' listeners' children') ->
+      if (tag == tag') && (listeners === listeners') then
+        bench.mini.patchAttrs node attrs attrs'
+        children'' = bench.mini.patchChildren dispatch node children children'
+        MEl node tag key' attrs' listeners' children''
+      else replace()
+    _ -> replace()
+
+{{ The keyed reconcile of {bench.mini.patch}'s children. }}
+bench.mini.patchChildren : (msg ->{JS} ()) -> JSValue -> [bench.mini.Mounted msg] -> [bench.mini.VNode msg] ->{JS} [bench.mini.Mounted msg]
+bench.mini.patchChildren dispatch parent olds news =
+  use Text ++
+  oldKey : Nat -> bench.mini.Mounted msg -> Text
+  oldKey index = cases
+    MEl _ _ key _ _ _ | key Text.!= "" -> key
+    _ -> "#" ++ Nat.toText index
+  newKey : Nat -> bench.mini.VNode msg -> Text
+  newKey index = cases
+    El _ key _ _ _ | key Text.!= "" -> key
+    _ -> "#" ++ Nat.toText index
+  keyedOld = cases (mounted, index) -> (oldKey index mounted, (index, mounted))
+  oldByKey = List.indexed olds |> List.map keyedOld |> Map.fromList
+  keyedNew = cases (vnode, index) -> newKey index vnode
+  newKeys = List.indexed news |> List.map keyedNew
+  found = List.map (key -> Map.get key oldByKey) newKeys
+  render = cases
+    (vnode, Some (_, mounted)) -> bench.mini.patch dispatch mounted vnode
+    (vnode, None)              -> bench.mini.create dispatch vnode
+  rendered = List.zip news found |> List.map render
+  keep = Set.fromList newKeys
+  dropMissing = cases
+    (mounted, index) -> if Set.contains (oldKey index mounted) keep then () else JSValue.invoke0_ "remove" (bench.mini.domOf mounted)
+  List.indexed olds |> List.foreach dropMissing
+  stable = lib.dfreeman_ink_r5.Incremental.reconcile.stableIndices (List.map (Optional.map at1) found)
+  place previous = cases
+    [] -> ()
+    (mounted, isStable) +: rest ->
+      node = bench.mini.domOf mounted
+      if isStable then place (Some node) rest
+      else
+        match previous with
+          Some before -> JSValue.invoke1_ "after" node before
+          None -> JSValue.invoke1_ "prepend" node parent
+        place (Some node) rest
+  place None (List.zip rendered stable)
+  rendered
+

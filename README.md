@@ -112,6 +112,7 @@ Each branch is built on the one before it, and carries the ink and warp versions
 | [`bench-jfb`](https://share.unison-lang.org/@nusentry/proscenium/code/bench-jfb) | `bench` + the js-framework-benchmark app for stock Proscenium (`bench.jfbstock`). | round 7 |
 | [`perf-r7u`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7u), [`perf-r7w`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7w) | `perf-r7` on warp `perf-r7u` and `perf-r7w`, for timing `Nat.toText` (`bench.totext`). | round 7 |
 | [`perf-r7-142`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7-142) | `perf-r7` on warp `perf-r7-142`. All apps match Leptos and round 5, and rows times the same as on 1.3.0. | round 7 |
+| [`perf-r7-mini`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7-mini) | `perf-r7` + `bench.mini`, a keyed virtual DOM with no ink and no Proscenium, with the rows app as data and through an `Html` ability with one handler: the floor for a tree without ink. | round 7 |
 
 ## Reproducing
 

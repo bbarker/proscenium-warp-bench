@@ -3,8 +3,8 @@
 Written 2026-10-30. The author of Proscenium has said that, given time for performance
 work, he would replace ink with something built for Proscenium's use. This note says what
 Proscenium takes from ink today, what that costs per element in the measured builds, and
-what a tree of Proscenium's own would look like behind the current API. The prototype is
-not built yet; the plan is `/var/workspace/ProsceniumWarpReviewPlan.md`, phase 5.
+what a tree of Proscenium's own would look like behind the current API. Its floor is
+measured ("The floor, measured", below); the prototype behind the API is not built yet.
 
 ## What Proscenium takes from ink
 
@@ -112,6 +112,33 @@ and the `KeyState` map. It also removes ink's records, replaced by one node.
 - **The checks:** `consistency.mjs`, `cards-check.mjs` and `meals-check.mjs` must pass
   unchanged, and the boundary and site counts are taken again to show what the tree
   removed.
+
+## The floor, measured
+
+Before building the tree behind Proscenium's API, its floor was measured: a keyed virtual
+DOM in plain Unison with no ink and no Proscenium (`bench.mini`, Proscenium
+`perf-r7-mini`; the report's "A floor for a tree without ink"). On the rows app, against
+round 7:
+
+- **Allocations:** 1,041 a row instead of 4,198.
+- **Creating rows:** 37% less time for 1,000, and 36% less for 10,000.
+- **Memory:** 44 MB at 10,000 rows instead of 152.
+- **Interactions:** level.
+
+Written through an `Html` ability with one handler, the shape this note proposes, it costs
+11 operations and 390 allocations a row more than plain data, and 13–24% more time to
+create rows.
+
+Three things the floor needed now belong in the design:
+
+- **The skip.** A memo node, skipped while its input is equal, is what makes interactions
+  cheap. This note's region skipped by closure equality is the same thing.
+- **Fast paths for children:** matching by position when no keys changed, and trimming
+  the common prefix and suffix before the keyed reconcile. Without the trim, removing a
+  row allocated eleven times as much.
+- **Targeted updates.** A whole-view diff costs selecting a row 70,000 allocations
+  against round 7's 2,900. The tree should keep `Keyed` and `Selector`'s targeted
+  updates rather than re-run a whole region's body.
 
 ## Open questions for the prototype
 

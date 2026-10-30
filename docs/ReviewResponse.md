@@ -148,6 +148,35 @@ work worth taking, rebased onto 1.4.2.**
 
   Each passes your tests; the second also passes the list fuzz test.
 
+## A floor for a tree without ink
+
+Before building a tree behind Proscenium's API, we measured how fast one could be with no
+ink at all. `bench.mini` on Proscenium `perf-r7-mini` is a keyed virtual DOM in about 200
+lines of Unison:
+- **Skipping:** a memo node, skipped while its input is equal.
+- **Children:** matched by position when no keys changed, with the common prefix and
+  suffix trimmed, and ink's `stableIndices` for the moves.
+
+The rows app runs on it twice, as plain data and through an `Html` ability with one
+handler. Against round 7, on the same warp:
+
+| Creating 1,000 rows | Round 7 | Data | One handler | Leptos |
+| --- | --- | --- | --- | --- |
+| allocations a row | 4,198 | 1,041 | 1,431 | |
+| handler operations a row | 41 | 0 | 11 | |
+| time (interleaved, loaded machine) | 150 ms | 94 ms | 106 ms | 76 ms |
+
+- **Larger lists:** creating 10,000 rows takes 756 ms against 1,177 (Leptos 812), and the
+  heap at 10,000 rows is 44 MB against 152.
+- **Interactions:** within a few ms of both.
+- **Size:** the module is 18 KB brotli, built in 0.24 s.
+
+So most of what is left after round 7 is the two libraries, not warp. An ability-based
+API with one handler keeps most of the gain. A whole-view diff is the wrong model for
+select, though: 70,000 allocations against `Selector`'s 2,900. So a tree of Proscenium's
+own should keep targeted updates. The report's "A floor for a tree without ink" has the
+full tables.
+
 ## Design notes, not built
 
 - `docs/ProsceniumTree.md`: a tree of Proscenium's own in place of ink, one handler,

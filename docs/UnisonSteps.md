@@ -326,6 +326,17 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/proscenium/bench-jfb> compile bench.jfbstock.build target/unison/frontend-bench/jfb-build-stock
 ```
 
+- [ ] The floor for a tree without ink (`bench.mini`: a keyed virtual DOM, the rows app as
+      data and through an `Html` ability), on a branch of `perf-r7`:
+
+```ucm
+@dfreeman/proscenium/perf-r7> branch /perf-r7-mini
+@dfreeman/proscenium/perf-r7-mini> load unison/scratch/proscenium--perf-r7-mini.u
+@dfreeman/proscenium/perf-r7-mini> add
+@dfreeman/proscenium/perf-r7-mini> compile bench.mini.rows.build target/unison/frontend-bench/rows-build-mini4
+@dfreeman/proscenium/perf-r7-mini> compile bench.mini.rowsh.build target/unison/frontend-bench/rows-build-minih4
+```
+
 Suggested `history.comment` lines:
 
 - ink/perf: `keyed reconcile in O(n log n) by longest increasing run, new children move with a moved predecessor; compute_ lets a message re-run only the computation owning its cell`
@@ -341,3 +352,4 @@ Suggested `history.comment` lines:
 - warp/perf-r7: `JS interop, Nat.toText and Text.indexOf take unboxed arguments and box their results in wasm (jsUnboxed); == compares a function with a closure by id in wasm; compare, == and Boolean intrinsics return shared boxes`
 - proscenium/perf-r7: `perf-r5m on warp perf-r7; bench.jfb, the js-framework-benchmark app`
 - proscenium/bench-jfb: `bench.jfbstock, the js-framework-benchmark app for stock Proscenium`
+- proscenium/perf-r7-mini: `bench.mini, a keyed virtual DOM in plain Unison with memo nodes and prefix/suffix trimming; the rows app as data and through a one-handler Html ability`
