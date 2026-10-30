@@ -228,6 +228,20 @@ repeat it.
   With every captured continuation made one-shot, the three apps pass every check and
   suite. Only base's `Each` resumes twice. That answers the cost the author named for
   dropping CPS in favour of stack switching.
+- **A signals UI on today's warp runs at Leptos's speed** ("Signals, without implicits",
+  `docs/Signals.md`). A minimal signals core in Leptos's model, with views built once and
+  effects that update their own DOM nodes, runs the rows suite:
+  - **Creating 1,000 rows:** 29.7 ms against Leptos's 28.0, round 7's 82.4 and the tree's
+    70.0.
+  - **Update every 10th:** 1.0 against 1.0.
+  - **Creating 10,000 rows:** 164 against 171.
+  - **Heap at 10,000 rows:** 22 MB against the tree's 121, and less than Leptos's JS heap
+    and linear memory together.
+  - **The module:** 19.7 KB brotli.
+
+  Nothing in warp changed: the cost measured in rounds 1 to 7 was the virtual DOM over
+  ink. Carrying the reactive context in an ability instead of an argument costs 7–10% on
+  building and nothing on updates. Implicits would run as explicit passing does.
 - **Neither handler shortcut would pay yet.**
   - **A direct path for handlers that resume once:** every one of the 41 operations a
     row has the shape ("Handlers that resume once"). But an operation costs about 70 ns
@@ -248,9 +262,10 @@ repeat it.
   - Interactive screens no longer feel different from Leptos. An interaction takes
     1–6.5 ms, and its frame lands when Leptos's does. A form, a settings screen or a list
     of tens to hundreds of items would make a fair trial now.
-  - Long lists still cost more: about twice as long to the frame for 1,000 rows, and
-    4.4 times the memory at 10,000. A screen that builds thousands of rows at once
-    should wait for the warp work under "Next experiments".
+  - Long lists still cost more on Proscenium as it is: about twice as long to the frame
+    for 1,000 rows, and 4.4 times the memory at 10,000. A signals library on today's
+    warp does not have that cost ("Signals, without implicits"), so a screen that builds
+    thousands of rows at once is a question of which library, not of warp.
   - Upstream the fixes first. The ink ordering bug affects every Proscenium user, and
     the other changes are general.
 
@@ -2241,6 +2256,41 @@ store would be the next change.
 - **The cost of registering owners** is a map entry per row, which the build of 10,000
   rows pays: its heap is 144 MB here against 94 MB for the plain app on the tree.
 
+#### The meals page
+
+The meals page needed less than the plan assumed. Its mascot is inline SVG set through an
+`innerHTML` property, not elements in the SVG namespace, and its FLIP move goes through the
+app's own `Flip` provider, not `Effect`. The tree gained:
+- **Properties:** set as Proscenium's sync sets them, and only when changed;
+- **Event payloads:** each listener's extractor reads the real event (the search's
+  `target.value`), after `preventDefault`.
+
+`bench.meals.ui` runs on it unchanged (`bench.tree.meals.build`). It matches Leptos over
+120 random steps on two seeds, and the rows apps and the cards page still pass their
+checks.
+
+Timed together with round 7 on ink and Leptos, 9 interleaved runs at load about 6
+(`results/round7-tree-meals.json`), median ms until the DOM is done:
+
+| Operation | Leptos | Round 7 on ink | **On the tree** |
+| --- | --- | --- | --- |
+| ready | 29.0 | 46.9 | **40.0** |
+| plan the week | 5.3 | 10.7 | **9.7** |
+| re-plan | 1.7 | 5.2 | **2.3** |
+| shuffle a meal | 2.2 | 1.2 | **0.9** |
+| add a serving | 1.6 | 1.2 | **0.6** |
+| remove a meal | 1.6 | 1.9 | **0.8** |
+| check an item | 0.6 | 0.8 | **0.4** |
+| move a day (FLIP) | 2.4 | 1.6 | **1.3** |
+| type 7 keys | 2.7 | 5.2 | 5.1 |
+| clear the search | 2.2 | 10.6 | **7.0** |
+| wave | 0.2 | 0.5 | 0.3 |
+
+**The tree is ahead of round 7 on every operation but typing, where they are level.** It
+is ahead of Leptos on the meal edits and the move, and behind it on building the week,
+loading and the search. Every frame lands when Leptos's does: the time to paint is
+within a millisecond or two of it on every operation.
+
 ### One-shot continuations: what resumes twice
 
 The author hopes native wasm stack switching will let warp drop its CPS paths, at the
@@ -2331,6 +2381,47 @@ not worth recognising the handler pattern across two functions, compiling the ar
 and giving frames a mutable handler. The operations' garbage dies young. The cost of a
 row is in ink's bookkeeping and the DOM, which the tree prototype removed for 32–39%.
 
+### Signals, without implicits
+
+Phase 6, reopened by the measurement above, is written up in `docs/Signals.md`.
+`bench.sig` (`@dfreeman/proscenium/perf-r7-signals`) is a minimal signals core in
+Leptos's model. A view is built once, and each part that depends on a signal is an effect
+that updates its own DOM node. It has owners, a keyed selector and a keyed list with the
+tree's reconcile. The rows app is written on it twice: with the reactive context passed
+explicitly, and carried by an ability (`Reactive`, one operation). Both match Leptos over
+200 steps on two seeds.
+
+The rows suite, 9 interleaved runs at load about 4 (`results/round7-signals-rows.json`),
+median ms until the DOM is done:
+
+| Operation | Leptos | Round 7 on ink | The tree | **Signals, explicit** | **Signals, ability** |
+| --- | --- | --- | --- | --- | --- |
+| create 1,000 | 28.0 | 82.4 | 70.0 | **29.7** | 32.8 |
+| append 1,000 | 19.1 | 52.8 | 38.2 | **15.5** | 16.8 |
+| update every 10th | 1.0 | 7.7 | 5.9 | **1.0** | 1.1 |
+| select a row | 0.6 | 0.8 | 0.7 | **0.4** | 0.5 |
+| swap rows | 0.7 | 5.4 | 1.8 | 2.2 | **1.7** |
+| remove a row | 0.9 | 5.9 | 2.1 | **1.1** | 1.2 |
+| create 10,000 | 170.9 | 617.3 | 433.0 | **163.8** | 178.3 |
+| clear 10,000 | 86.3 | 116.5 | 175.1 | 61.6 | **59.3** |
+| heap at 10,000 rows (MB) | 9.7 + 21.8 linear | 142.0 | 120.5 | **21.9** | 22.8 |
+
+The module is 19.7 KB brotli, and warp builds it in 0.26 s.
+
+- **On today's warp, a signals UI runs at Leptos's speed.** Creating and updating rows
+  take about Leptos's time, appending and clearing take less, and the heap at 10,000 rows
+  is smaller than Leptos's JS heap and linear memory together. Nothing in warp changed.
+  What rounds 1 to 7 measured was the cost of a virtual DOM over ink.
+- **The author's tradeoff does not bite here.** A signal, two effects, an owner and a
+  selector entry per row cost less to set up than a tree of memo nodes, and the updates
+  are as cheap as signals promise.
+- **An ability carries the context for 7–10% on building and nothing on updates.**
+  Implicits, under the open RFC (unisonweb/unison #6238), elaborate to ordinary arguments,
+  so they would run as explicit passing does. Without context functions in its v1, each
+  effect would still bind its context by hand.
+
+### Next experiments, by expected payoff
+
 ### Next experiments, by expected payoff
 
 Re-ranked on 2026-10-30. Two earlier items are dropped: ahead-of-time unboxing, which
@@ -2343,6 +2434,13 @@ boundary (round 7).
    operations today, one Proscenium's and one ink's, plus ink's records, keys and `Delta`
    values. The floor ("A floor for a tree without ink") says this is where most of the
    remaining cost is: a quarter of the allocations, and 37% less time to create rows.
+   The prototype now runs all four apps (rows twice, cards, meals) and the
+   js-framework-benchmark app unchanged.
+   - **Or signals,** for the larger step: views built once and updated by effects reach
+     Leptos's speed on the rows suite ("Signals, without implicits"). That is a
+     different programming model from `useState` and re-rendered bodies. The next
+     measurements would be the meals page in that style, and whether a `useState` whose
+     readers are effects can keep Proscenium's API.
 2. **warp: continuation handling.**
    - Compiling a handler that resumes once, in tail position, as a direct call is
      measured and not worth building now: every operation on the rows path qualifies,
@@ -2401,6 +2499,10 @@ boundary (round 7).
   Chromium; `results/` holds the runs.
 - `bench/stack-switching/`: `handlers.wat` and `run.mjs`, the stack-switching mechanism
   timed against continuation passing.
+- `docs/Signals.md`: phase 6, signals without implicits: the core, the rows app twice,
+  and the comparison with explicit passing and implicits.
+- `unison/ucm-bugs/`: a two-line repro of a UCM 1.5.0 runtime bug found on the way,
+  applying a function read from a `Ref` directly.
 - `bench/js-framework-benchmark/`: the Proscenium entry for js-framework-benchmark
   (`keyed-proscenium/`), `install.nu` to put it into a checkout, and `summary.nu` to
   tabulate a run.
@@ -2436,7 +2538,8 @@ boundary (round 7).
       experiment `guard-one-shot`, and the measurements `detect-tail-resumptive` and
       `handler-cost`;
     - Proscenium `perf-r7`, `bench-jfb`, `perf-r7-142`, `perf-r7-guard`, the floor
-      `perf-r7-mini` (`bench.mini`) and the prototype `perf-r7-tree` (`bench.tree`).
+      `perf-r7-mini` (`bench.mini`), the prototype `perf-r7-tree` (`bench.tree`) and the
+      signals core `perf-r7-signals` (`bench.sig`).
 
     The README's branch tables say what each holds.
 

@@ -404,6 +404,21 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/proscenium/perf-r7-tree> compile bench.tree.rows.build target/unison/frontend-bench/rows-build-tree2
 @dfreeman/proscenium/perf-r7-tree> compile bench.rows.build target/unison/frontend-bench/rows-build-plain
 @dfreeman/proscenium/perf-r7-tree> compile bench.tree.rowsfg.build target/unison/frontend-bench/rows-build-treefg4
+@dfreeman/proscenium/perf-r7-tree> compile bench.tree.cards.build target/unison/frontend-bench/cards-400-build-tree5
+@dfreeman/proscenium/perf-r7-tree> compile bench.tree.jfb.build target/unison/frontend-bench/jfb-build-tree5
+@dfreeman/proscenium/perf-r7-tree> compile bench.tree.meals.build target/unison/frontend-bench/meals-build-tree
+```
+
+- [ ] Signals (phase 6): `bench.sig`, a minimal signals core, and the rows app on it with
+      the reactive context passed explicitly and carried by an ability, on a branch of
+      `perf-r7-tree`:
+
+```ucm
+@dfreeman/proscenium/perf-r7-tree> branch /perf-r7-signals
+@dfreeman/proscenium/perf-r7-signals> load unison/scratch/proscenium--perf-r7-signals.u
+@dfreeman/proscenium/perf-r7-signals> add
+@dfreeman/proscenium/perf-r7-signals> compile bench.sig.rows.build target/unison/frontend-bench/rows-build-sig
+@dfreeman/proscenium/perf-r7-signals> compile bench.sig.rowsA.build target/unison/frontend-bench/rows-build-siga
 ```
 
 - [ ] The two library offers that stand alone: ink's ordering fix on 2.0.1 (`perf`'s first
@@ -446,5 +461,7 @@ Suggested `history.comment` lines:
 - warp/handler-cost: `bench.handlerCost: a million ability operations through a recursive state-carrying handler, under 0, 4 and 16 other handlers, against plain calls`
 - proscenium/perf-r7-guard: `perf-r7 on warp guard-one-shot, to show that nothing resumes a continuation twice`
 - proscenium/perf-r7-tree: `bench.tree: Proscenium's Render API on a tree of its own with one handler, cells by path and a memo per element; bench.rows.ui runs on it unchanged`
+- proscenium/perf-r7-tree (meals): `bench.tree: properties, and listeners that read the real event; bench.tree.meals.build runs the meals page unchanged`
+- proscenium/perf-r7-signals: `bench.sig: a minimal signals core (signals, effects, owners, a keyed selector, a keyed list) and the rows app on it, with the reactive context passed explicitly and carried by an ability`
 - ink/offer-1-ordering: `keyed reconcile in O(n log n); a new child moves with a moved predecessor; regression tests for a rotate and insert and a swap and insert`
 - proscenium/offer-stores: `Keyed and Selector provider stores for fine-grained updates, with tests`

@@ -192,9 +192,30 @@ That app runs on it unchanged:
   update every 10th 4.8 against 6.0 ms, swap 1.7 against 5.4, create 10,000 389 against
   571. The 400-card page runs on it too, ready in 82 ms against ink's 88.
 
+**The meals page.** It needed less than expected. Its mascot is inline SVG set through an
+`innerHTML` property, not elements in the SVG namespace, and its FLIP move goes through
+the app's own `Flip` provider, not `Effect`. The tree gained two things:
+- **Properties:** an element carries its `Property` modifiers and sets them as
+  Proscenium's own sync does, text directly and other JSON as the value it describes. A
+  property is set again only when it changed, so the mascot's SVG is not rebuilt when
+  its pose changes.
+- **Event payloads:** a listener's extractor reads the real event, as the search's
+  `target.value` needs, after `preventDefault`, as Proscenium's listeners do.
+
+`bench.meals.ui` then runs on it unchanged, with its `Flip` provider. It matches Leptos over
+120 random steps on two seeds: shuffle, serve, remove, re-plan, check and uncheck, move a
+day, type a query, wave. The rows apps and the cards page still pass their checks after
+the change.
+
+Timed with round 7 on ink and Leptos (the report's "The meals page"), the tree is ahead of
+round 7 on every operation but typing, where they are level. For example, re-planning
+takes 2.3 ms against 5.2, removing a meal 0.8 against 1.9, and the page is ready in 40 ms
+against 47. It is ahead of Leptos on the meal edits and the FLIP move, and behind it on
+building the week and the search.
+
 Not in the prototype yet:
-- `Effect`, namespaces, and payloads other than a click's. So the meals app doesn't run on
-  it. The 400-card page does, since it needs only elements, text, `useState` and clicks.
+- `Effect` (`useEffect`) and elements in another namespace. None of the four apps uses
+  them.
 
 **Cleanup, and cells in the mounted tree.** js-framework-benchmark's create-and-clear
 memory found the tree keeping removed rows' cells: 61.6 MB. The fix answers this note's

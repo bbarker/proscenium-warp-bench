@@ -1,0 +1,9 @@
+repro.callRead : Ref {IO} ('{IO, Exception} ()) ->{IO, Exception} ()
+repro.callRead r = (Ref.read r)()
+
+repro.main : '{IO, Exception} ()
+repro.main = do
+  thunk : '{IO, Exception} ()
+  thunk = do printLine "called"
+  r = IO.ref thunk
+  repro.callRead r

@@ -24,10 +24,14 @@ the library's own terms. Each stands alone unless it says otherwise.
 - **Proscenium `offer-stores`** (on 0.4.3): the `Keyed` and `Selector` stores, which make
   a selection or a row's label update re-render only the rows involved.
 
-And two directions to decide on, with the measurements below:
-- **A tree of Proscenium's own in place of ink.** A first prototype runs both rows apps
-  unchanged, and the 400-card page. It beats ink on every operation of the fine-grained
-  rows app except append, where it is 5% slower.
+And three directions to decide on, with the measurements below:
+- **A tree of Proscenium's own in place of ink.** A first prototype runs every app
+  unchanged: both rows apps, the cards page, the meals page and js-framework-benchmark's.
+  It beats ink on almost every operation.
+- **Signals.** A minimal signals core on today's warp runs the rows suite at Leptos's
+  speed, with a sixth of the tree's heap. Carrying its context in an ability costs 7–10%
+  on building, and implicits would cost nothing at runtime ("Signals, without
+  implicits", below).
 - **One-shot stack switching.** It would be enough for ink and Proscenium: nothing in
   them resumes a continuation twice. Today it would not make them faster, and nor would
   a direct path for handlers that resume once ("What is left", below).
@@ -178,6 +182,7 @@ paid off for `compare`, `==` and `List`.
 | warp `offer-3-text` | on 1.4.2, standalone: `Text` by code point, which fixes emoji splitting and missed text `match` arms; the differential text fuzz | Yes |
 | warp `guard-one-shot`, Proscenium `perf-r7-guard` | every continuation one-shot, to show that nothing in Proscenium or ink resumes twice | No: an experiment |
 | warp `detect-tail-resumptive`, `handler-cost` | which handler arms resume once in tail position, and what an operation costs against a plain call | No: measurements |
+| Proscenium `perf-r7-signals` | `bench.sig`, a minimal signals core, and the rows app on it twice (context explicit, and in an ability) | Bench code; the core is a sketch for a decision |
 | Proscenium `perf-r7-mini` | `bench.mini`, the floor for a tree without ink | Bench code only |
 
 The branches above are against 1.3.0. **`@dfreeman/warp/perf-r7-142` is all of the warp
@@ -273,7 +278,43 @@ mounted node. The suite, against round 7 on ink:
 - **Memory after create and clear:** 0.96 MB against 1.58.
 - **Size:** 42 KB against 54, smaller than Leptos's 49.
 
-Effects aren't in it yet, so the meals page doesn't run on it.
+The meals page runs on it too, unchanged. It needed properties (the mascot's SVG is set
+through `innerHTML`) and listeners that read the real event (the search), not effects. It
+matches Leptos over 120 steps on two seeds. Against round 7 on ink it is ahead on every
+operation but typing, where they are level: re-plan 2.3 against 5.2 ms, remove a meal 0.8
+against 1.9, ready in 40 against 47.
+
+## Signals, without implicits
+
+You asked about signals and implicits. We built the smallest signals core we could,
+`bench.sig` on Proscenium `perf-r7-signals` (`docs/Signals.md`), in Leptos's model:
+- **The model:** a view is built once, and each part that depends on a signal is an
+  effect that updates its own DOM node.
+- **The pieces:** owners, a keyed selector, and a keyed list with the tree's reconcile.
+
+The rows app is written on it twice: with the reactive context passed explicitly, and
+carried by an ability with one operation. Both match Leptos. The rows suite, median ms:
+
+| | Leptos | Round 7 on ink | The tree | Signals, explicit | Signals, ability |
+| --- | --- | --- | --- | --- | --- |
+| create 1,000 | 28.0 | 82.4 | 70.0 | 29.7 | 32.8 |
+| update every 10th | 1.0 | 7.7 | 5.9 | 1.0 | 1.1 |
+| select | 0.6 | 0.8 | 0.7 | 0.4 | 0.5 |
+| create 10,000 | 171 | 617 | 433 | 164 | 178 |
+| heap at 10,000 (MB) | 9.7 + 21.8 linear | 142 | 121 | 22 | 23 |
+
+- **Signals reach Leptos's speed on today's warp,** with no change to warp. The setup per
+  row costs less than a virtual DOM's, so on these apps the tradeoff you described does
+  not bite.
+- **An ability carries the context for 7–10% on building, nothing on updates.** No
+  implicits are needed to keep components free of a context argument.
+- **Implicits would run as explicit passing does:** the RFC (unisonweb/unison #6238)
+  elaborates a given to an ordinary argument. Without context functions in its v1, each
+  effect would still bind its context by hand.
+
+That is a different model from `useState` and re-rendered bodies, so whether Proscenium
+goes that way is yours to decide. One possibility to measure next would be a `useState`
+whose readers are effects.
 
 ## One-shot continuations
 
@@ -318,7 +359,7 @@ select, though: 70,000 allocations against `Selector`'s 2,900. So a tree of Pros
 own should keep targeted updates. The report's "A floor for a tree without ink" has the
 full tables.
 
-## Design notes, not built
+## Design notes
 
 - `docs/ProsceniumTree.md`: a tree of Proscenium's own in place of ink, one handler,
   behind the current API.
