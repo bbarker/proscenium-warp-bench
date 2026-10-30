@@ -1,0 +1,300 @@
+{{
+A store of values by key, each with its own subscribers:
+`useKeyed` reads one key and subscribes the component reading
+it, and `setKeyed` tells only the subscribers of the keys it
+changes. It is how a list's rows can each hold their own data,
+the way a signal per row does in a fine-grained framework, so
+that changing one row re-renders that row and nothing else.
+
+A provider holds the store and exposes it through an accessor,
+as for {type Singleton}.
+}}
+type provider.Keyed k v
+  = Keyed (Map k v) (Map k [Optional v ->{Update} ()])
+
+type provider.Keyed.Accessor k v b
+  = Accessor (Keyed k v -> (Keyed k v, b))
+
+{{
+Which one key, if any, is selected, with subscribers by key:
+`useSelected` asks whether one key is the selected one, and
+`select` tells only the subscribers of the keys whose answer
+changes, the one that was selected and the one that now is. It
+is what a `Selector` is in a fine-grained framework: selecting
+one row of a thousand re-renders two rows.
+}}
+type provider.Selector k
+  = Selector (Optional k) (Map k [Boolean ->{Update} ()])
+
+type provider.Selector.Accessor k b
+  = Accessor (Selector k -> (Selector k, b))
+
+provider.Keyed.Accessor.apply :
+  Keyed.Accessor k v b -> Keyed k v -> (Keyed k v, b)
+provider.Keyed.Accessor.apply = cases
+  Keyed.Accessor.Accessor f -> f
+
+provider.Keyed.new : Keyed k v
+provider.Keyed.new =
+  use Map empty
+  Keyed empty empty
+
+{{
+Adds values without telling anyone: for keys nobody can have
+subscribed to yet, such as the rows about to be drawn.
+}}
+provider.Keyed.putKeyed :
+  (∀ b. Keyed.Accessor k v b ->{g} b) -> [(k, v)] ->{g} ()
+provider.Keyed.putKeyed access entries =
+  access
+    (Keyed.Accessor.Accessor cases
+      Keyed values subs ->
+        ( Keyed
+            (List.foldLeft
+              (values rn4c25ifmc1 -> let
+                (key, value) = rn4c25ifmc1
+                Map.insert key value values) values entries)
+            subs
+        , ()
+        ))
+
+{{
+The value at `key`, without subscribing to it: for event
+handlers.
+}}
+provider.Keyed.readKeyed :
+  (∀ b. Keyed.Accessor k v b ->{g} b) -> k ->{g} Optional v
+provider.Keyed.readKeyed access key =
+  access
+    (Keyed.Accessor.Accessor cases
+      Keyed values subs ->
+        (Keyed values subs, Map.get key values))
+
+{{
+Replaces every value without telling anyone: for a caller
+about to render every subscriber again, or remove it, anyway.
+}}
+provider.Keyed.replaceKeyed :
+  (∀ b. Keyed.Accessor k v b ->{g} b) -> Map k v ->{g} ()
+provider.Keyed.replaceKeyed access values' =
+  access
+    (Keyed.Accessor.Accessor cases
+      Keyed _ subs -> (Keyed values' subs, ()))
+
+{{
+Sets (`Some`) or removes (`None`) the values at the given
+keys, and tells each key's subscribers its new value; no other
+component is told.
+}}
+provider.Keyed.setKeyed :
+  (∀ b. Keyed.Accessor k v b ->{g} b)
+  -> [(k, Optional v)]
+  ->{g, Update} ()
+provider.Keyed.setKeyed access changes =
+  apply = cases
+    Keyed values subs ->
+      store values = cases
+        (key, Some value) -> Map.insert key value values
+        (key, None)       -> Map.delete key values
+      tell = cases
+        (key, value) ->
+          Map.get key subs
+            |> Optional.getOrElse []
+            |> List.map (send -> do send value)
+      ( Keyed (List.foldLeft store values changes) subs
+      , List.flatMap tell changes
+      )
+  List.foreach
+    (notify -> notify())
+    (access (Keyed.Accessor.Accessor apply))
+
+{{
+The value at `key`, subscribing this component to it: when
+`setKeyed` changes that key, this component renders again with
+the new value. Deletes the `key` entry from `subs` when the
+last subscriber unsubscribes so removed keys do not retain
+empty list entries.
+}}
+provider.Keyed.useKeyed :
+  (∀ b. Keyed.Accessor k v b ->{g} b)
+  -> k
+  ->{Render g} Optional v
+provider.Keyed.useKeyed access key =
+  use Keyed.Accessor Accessor
+  use List +:
+  use Map get insert
+  subscribers subs = get key subs |> Optional.getOrElse []
+  useCell
+    (send ->
+      let
+        subscribe = cases
+          Keyed values subs ->
+            ( Keyed
+                values
+                (insert key (send +: subscribers subs) subs)
+            , get key values
+            )
+        unsubscribe = cases
+          Keyed values subs ->
+            remaining =
+              deleteFirst
+                (Universal.eq send) (subscribers subs)
+            subs' =
+              if List.isEmpty remaining then
+                Map.delete key subs
+              else insert key remaining subs
+            (Keyed values subs', ())
+        value = access (Accessor subscribe)
+        onCleanup (_ -> access (Accessor unsubscribe))
+        onMessage (_ newValue -> newValue)
+        value)
+
+provider.Selector.Accessor.apply :
+  Selector.Accessor k b -> Selector k -> (Selector k, b)
+provider.Selector.Accessor.apply = cases
+  Selector.Accessor.Accessor f -> f
+
+provider.Selector.new : Selector k
+provider.Selector.new = Selector None Map.empty
+
+{{
+Selects `key` (or nothing), telling the subscribers of the
+previously selected key and of the new one.
+}}
+provider.Selector.select :
+  (∀ b. Selector.Accessor k b ->{g} b)
+  -> Optional k
+  ->{g, Update} ()
+provider.Selector.select access selected' =
+  use List ++ flatMap
+  use Optional toList
+  apply = cases
+    Selector current subs ->
+      tell flag key =
+        Map.get key subs
+          |> Optional.getOrElse []
+          |> List.map (send -> do send flag)
+      notify =
+        if current === selected' then []
+        else
+          flatMap (tell false) (toList current)
+            ++ flatMap (tell true) (toList selected')
+      (Selector selected' subs, notify)
+  List.foreach
+    (notify -> notify())
+    (access (Selector.Accessor.Accessor apply))
+
+{{
+Whether `key` is the selected one, subscribing this component
+to the answer. Deletes `key` from `subs` when the last
+subscriber unsubscribes.
+}}
+provider.Selector.useSelected :
+  (∀ b. Selector.Accessor k b ->{g} b)
+  -> k
+  ->{Render g} Boolean
+provider.Selector.useSelected access key =
+  use List +:
+  use Map insert
+  use Selector.Accessor Accessor
+  subscribers subs = Map.get key subs |> Optional.getOrElse []
+  useCell
+    (send ->
+      let
+        subscribe = cases
+          Selector current subs ->
+            ( Selector
+                current
+                (insert key (send +: subscribers subs) subs)
+            , current === Some key
+            )
+        unsubscribe = cases
+          Selector current subs ->
+            remaining =
+              deleteFirst
+                (Universal.eq send) (subscribers subs)
+            subs' =
+              if List.isEmpty remaining then
+                Map.delete key subs
+              else insert key remaining subs
+            (Selector current subs', ())
+        value = access (Accessor subscribe)
+        onCleanup (_ -> access (Accessor unsubscribe))
+        onMessage (_ selected -> selected)
+        value)
+
+ability tests.testKeyed.Labels where
+  internal.accessLabels : Keyed.Accessor Nat Text b ->{tests.testKeyed.Labels} b
+
+{{ Two components each read one key of a {type Keyed} store. Setting a key shows in the component reading it and in no other, and removing a key shows as no value. }}
+tests.testKeyed : [Result]
+tests.testKeyed =
+  use Render text
+  use dom find
+  use el div
+  use tests.testKeyed.Labels.internal accessLabels
+  labelsProvider : Provider x tests.testKeyed.Labels
+  labelsProvider =
+    Provider.define
+      let
+        handler state = cases
+          { accessLabels accessor -> resume } ->
+            (state', result) = Keyed.Accessor.apply accessor state
+            handle resume result with handler state'
+          { () } -> ()
+        handler Keyed.new
+  app.verify labelsProvider do
+    TestUI.render do
+      div [class "first"] do text (useKeyed accessLabels 1 |> Optional.getOrElse "none")
+      div [class "second"] do text (useKeyed accessLabels 2 |> Optional.getOrElse "none")
+    ensureEqual "none" (find (hasClass "first") |> innerText)
+    ensureEqual "none" (find (hasClass "second") |> innerText)
+    TestUI.update do setKeyed accessLabels [(1, Some "one")]
+    ensureEqual "one" (find (hasClass "first") |> innerText)
+    ensureEqual "none" (find (hasClass "second") |> innerText)
+    TestUI.update do setKeyed accessLabels [(1, None), (2, Some "two")]
+    ensureEqual "none" (find (hasClass "first") |> innerText)
+    ensureEqual "two" (find (hasClass "second") |> innerText)
+
+ability tests.testSelector.Selection where
+  internal.accessSelection : Selector.Accessor Nat b ->{tests.testSelector.Selection} b
+
+{{ Three components each ask a {type Selector} whether their key is selected. Selecting a key, then another, then none, changes the answer of exactly the keys involved. }}
+tests.testSelector : [Result]
+tests.testSelector =
+  use Render text
+  use dom find
+  use el div
+  use tests.testSelector.Selection.internal accessSelection
+  selectionProvider : Provider x tests.testSelector.Selection
+  selectionProvider =
+    Provider.define
+      let
+        handler state = cases
+          { accessSelection accessor -> resume } ->
+            (state', result) = Selector.Accessor.apply accessor state
+            handle resume result with handler state'
+          { () } -> ()
+        handler Selector.new
+  answer isSelected = if isSelected then "selected" else "-"
+  row key = div [class ("row" Text.++ Nat.toText key)] do text (answer (useSelected accessSelection key))
+  shown key = find (hasClass ("row" Text.++ Nat.toText key)) |> innerText
+  app.verify selectionProvider do
+    TestUI.render do
+      row 1
+      row 2
+      row 3
+    ensureEqual ["-", "-", "-"] [shown 1, shown 2, shown 3]
+    TestUI.update do Selector.select accessSelection (Some 2)
+    ensureEqual ["-", "selected", "-"] [shown 1, shown 2, shown 3]
+    TestUI.update do Selector.select accessSelection (Some 3)
+    ensureEqual ["-", "-", "selected"] [shown 1, shown 2, shown 3]
+    TestUI.update do Selector.select accessSelection None
+    ensureEqual ["-", "-", "-"] [shown 1, shown 2, shown 3]
+
+ReleaseNotes : Doc
+ReleaseNotes =
+  {{
+  * This release introduces the {type Root} type, with corresponding {create}, {Root.render} and {destroy} functions for explicit lifecycle management.
+  * Two provider stores for fine-grained updates, built like {type Singleton}. {type Keyed} holds values by key: `useKeyed` reads one key and subscribes the component, and `setKeyed` tells only the subscribers of the keys it changes. {type Selector} holds which key, if any, is selected: `useSelected` subscribes a component to whether its key is the one, and `Selector.select` tells only the two keys whose answer changes. Selecting one row of a thousand re-renders two rows. `tests.testKeyed` and `tests.testSelector` cover them.
+  }}

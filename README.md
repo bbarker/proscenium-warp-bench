@@ -69,6 +69,7 @@ clone of the upstream project named in the first row, and the report writes them
 | [`perf-mount-compute`](https://share.unison-lang.org/@nusentry/ink/code/perf-mount-compute) | Skips the diff when a computation first mounts. | round 3 |
 | [`perf-r4`](https://share.unison-lang.org/@nusentry/ink/code/perf-r4) | Fast paths for prefixes, suffixes, swaps, appends, clears. | round 4 |
 | [`perf-r5`](https://share.unison-lang.org/@nusentry/ink/code/perf-r5) | Previous children found by position; single-pass key counts. | round 5 |
+| [`offer-1-ordering`](https://share.unison-lang.org/@nusentry/ink/code/offer-1-ordering) | **To offer, standalone on 2.0.1:** `perf`'s keyed reconcile and ordering fix alone, without `compute_`, with two regression tests that fail on 2.0.1 (`tests.relocateAndInsert`, `tests.swapAndInsert`) and release notes. All 41 tests pass. | to offer |
 
 ### warp ([`@nusentry/warp`](https://share.unison-lang.org/@nusentry/warp), from `@dfreeman/warp` 1.3.0)
 
@@ -97,6 +98,7 @@ Each branch is built on the one before it, and carries the ink and warp versions
 | Branch | What it adds | Round |
 | --- | --- | --- |
 | [`bench`](https://share.unison-lang.org/@nusentry/proscenium/code/bench) | The benchmark apps (counter, rows, cards) and timed build entries. | setup |
+| [`offer-stores`](https://share.unison-lang.org/@nusentry/proscenium/code/offer-stores) | **To offer, standalone on 0.4.3:** the `Keyed` and `Selector` provider stores, with `tests.testKeyed` and `tests.testSelector` (a select that notifies no one fails the second) and release notes. | to offer |
 | [`perf`](https://share.unison-lang.org/@nusentry/proscenium/code/perf) | ink's keyed diff. | round 1 |
 | [`perf-compare`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-compare) | + warp's compare in wasm. | round 1 |
 | [`perf-eq`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-eq) | + warp's `==` in wasm. | round 1 |

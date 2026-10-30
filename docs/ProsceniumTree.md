@@ -1,7 +1,7 @@
 # A tree of Proscenium's own: design note
 
 Written 2026-10-30. The author of Proscenium has said that, given time for performance
-work, he would replace ink with something built for Proscenium's use. This note says what
+work, they would replace ink with something built for Proscenium's use. This note says what
 Proscenium takes from ink today, what that costs per element in the measured builds, and
 what a tree of Proscenium's own would look like behind the current API. Its floor is
 measured ("The floor, measured", below); the prototype behind the API is not built yet.

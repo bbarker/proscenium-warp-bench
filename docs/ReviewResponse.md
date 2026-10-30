@@ -1,10 +1,37 @@
 # After the review: what was tried, and what it showed
 
-This is for the author of warp and Proscenium. It follows his review of 2026-10-30 and
+This is for the author of warp and Proscenium. It follows their review of 2026-10-30 and
 summarises the work done since. The details are in `docs/REPORT.md` ("Review from the
-author", "Measured attribution", "Round 7") and `docs/ProsceniumTree.md`. Every change is
-on its own branch, against warp 1.3.0, Proscenium 0.4.3 and ink 2.0.1, the versions the
-benchmark started from. Nothing here assumes it will be taken.
+author", "Measured attribution", "Round 7" and the sections after it),
+`docs/ProsceniumTree.md` and `docs/TailResumptive.md`. Nothing here assumes it will be
+taken.
+
+## What to take, if you want it
+
+Each of these is one branch on the current release, with its tests and release notes in
+the library's own terms. Each stands alone unless it says otherwise.
+
+- **ink `offer-1-ordering`** (on 2.0.1): the keyed reconcile in `O(n log n)`, and the fix
+  for a new child left behind when its predecessor moves. Its two regression tests fail
+  on 2.0.1. This is the one that affects every Proscenium user today.
+- **warp `offer-3-text`** (on 1.4.2): `Text` counted and ordered by code point, as Unison
+  does. On 1.4.2 an emoji is two characters, and a text `match` can miss its arm. It
+  comes with a differential text fuzz.
+- **warp `offer-1-compare-eq`, then `offer-2-list`** (on 1.4.2, stacked): `compare` and
+  `==` in wasm, then `List` as a wasm tree of arrays.
+- **warp `perf-r7-142`** (on 1.4.2): all of the warp work, with the unboxed JS builtins
+  and shared result boxes on top of the two above, and the text fix.
+- **Proscenium `offer-stores`** (on 0.4.3): the `Keyed` and `Selector` stores, which make
+  a selection or a row's label update re-render only the rows involved.
+
+And two directions to decide on, with the measurements below:
+- **A tree of Proscenium's own in place of ink.** A first prototype runs both rows apps
+  unchanged and is faster than ink on every operation of the fine-grained one.
+- **One-shot stack switching.** It would be enough for ink and Proscenium: nothing in
+  them resumes a continuation twice.
+
+The branches the benchmark started from are against warp 1.3.0, Proscenium 0.4.3 and ink
+2.0.1. The table at the end lists them all.
 
 ## Two corrections
 
@@ -124,6 +151,7 @@ paid off for `compare`, `==` and `List`.
 | Branch | What it is | Worth taking? |
 | --- | --- | --- |
 | ink `perf` | O(n log n) keyed reconcile, which fixes the ordering bug after a move and an insert | Yes: the bug affects every Proscenium user |
+| ink `offer-1-ordering` | the same reconcile and fix alone on 2.0.1, without `compute_`, with two regression tests that fail on 2.0.1 | Yes: the way to take the fix |
 | ink `perf`, `perf-mount-compute`, `perf-r4`, `perf-r5` | `compute_`, no diff on first mount, fast paths, children by position | If ink stays |
 | warp `perf` | `Universal.compare` and `==` in wasm | Yes |
 | warp `perf-r4` | `List` as a wasm tree of arrays (with a 9,000-operation differential test); typed JS calls | Yes |
@@ -131,6 +159,7 @@ paid off for `compare`, `==` and `List`.
 | warp `perf-r7` | unboxed JS builtins (`jsUnboxed`), `==` for functions, shared result boxes (`sharedValues`), `Text.size`/`take`/`drop` over `wasm:js-string` | Yes |
 | warp `perf-r7u`, `perf-r7w` | `Nat.toText` in Unison and in the DSL, for the comparison above | No: experiments |
 | Proscenium `perf-fine` … `perf-r5` | key hints as data, `elementWith`, `Keyed`, `Selector`, DOM sync bottom-up | If ink stays; `Keyed` and `Selector` either way |
+| Proscenium `offer-stores` | `Keyed` and `Selector` alone on 0.4.3, with tests in the style of `testSingleton` | Yes: they work on stock ink, and on the tree |
 | Proscenium `perf-r7`, `bench-jfb` | the benchmark apps, including `bench.jfb` and `bench.jfbstock` for js-framework-benchmark | Bench code only |
 | warp `offer-3-text` | on 1.4.2, standalone: `Text` by code point, which fixes emoji splitting and missed text `match` arms; the differential text fuzz | Yes |
 | warp `guard-one-shot`, Proscenium `perf-r7-guard` | every continuation one-shot, to show that nothing in Proscenium or ink resumes twice | No: an experiment |

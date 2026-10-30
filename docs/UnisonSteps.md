@@ -390,6 +390,22 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/proscenium/perf-r7-tree> compile bench.tree.rowsfg.build target/unison/frontend-bench/rows-build-treefg4
 ```
 
+- [ ] The two library offers that stand alone: ink's ordering fix on 2.0.1 (`perf`'s first
+      step, `#7tptpse51l`, plus its regression tests and release notes), and Proscenium's
+      `Keyed` and `Selector` on 0.4.3 (`main`):
+
+```ucm
+@dfreeman/ink/perf> branch /offer-1-ordering
+@dfreeman/ink/offer-1-ordering> reset #7tptpse51l
+@dfreeman/ink/offer-1-ordering> load unison/scratch/ink--offer-1-ordering.u
+@dfreeman/ink/offer-1-ordering> update
+@dfreeman/ink/offer-1-ordering> test
+@dfreeman/proscenium/main> branch /offer-stores
+@dfreeman/proscenium/offer-stores> load unison/scratch/proscenium--offer-stores.u
+@dfreeman/proscenium/offer-stores> update
+@dfreeman/proscenium/offer-stores> test
+```
+
 Suggested `history.comment` lines:
 
 - ink/perf: `keyed reconcile in O(n log n) by longest increasing run, new children move with a moved predecessor; compute_ lets a message re-run only the computation owning its cell`
@@ -412,3 +428,5 @@ Suggested `history.comment` lines:
 - warp/guard-one-shot: `experiment: shift::continue poisons its data after the first resume, so a second resume of any continuation traps`
 - proscenium/perf-r7-guard: `perf-r7 on warp guard-one-shot, to show that nothing resumes a continuation twice`
 - proscenium/perf-r7-tree: `bench.tree: Proscenium's Render API on a tree of its own with one handler, cells by path and a memo per element; bench.rows.ui runs on it unchanged`
+- ink/offer-1-ordering: `keyed reconcile in O(n log n); a new child moves with a moved predecessor; regression tests for a rotate and insert and a swap and insert`
+- proscenium/offer-stores: `Keyed and Selector provider stores for fine-grained updates, with tests`

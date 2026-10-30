@@ -1,0 +1,42 @@
+{{
+A rotate and insert: the last child moves to the front and a new child is inserted right after it, as a table does for "rotate and insert". The new child must end up after the moved one, not where the moved one used to be.
+
+Each child is its own computation with its own tag, so the run correlates them by identity, as a keyed list does.
+}}
+tests.relocateAndInsert : [Result]
+tests.relocateAndInsert =
+  ReconcileTest.run do
+    use Text ++
+    child tag = compute (Some tag) do tag
+    runReconcile [] do
+      a = child "A"
+      b = child "B"
+      c = child "C"
+      a ++ b ++ c
+    expectEqual lastTree (T "ABC" [T "A" [], T "B" [], T "C" []])
+    runReconcile [] do
+      c = child "C"
+      n = child "N"
+      a = child "A"
+      b = child "B"
+      c ++ n ++ a ++ b
+    expectEqual lastTree (T "CNAB" [T "C" [], T "N" [], T "A" [], T "B" []])
+
+{{ A swap of the first and last of five children, with a new child after the new first. }}
+tests.swapAndInsert : [Result]
+tests.swapAndInsert =
+  ReconcileTest.run do
+    child tag = compute (Some tag) do tag
+    runReconcile [] do
+      List.map child ["A", "B", "C", "D", "E"] |> Text.join ""
+    runReconcile [] do
+      List.map child ["E", "N", "B", "C", "D", "A"] |> Text.join ""
+    expectEqual lastTree (T "ENBCDA" [T "E" [], T "N" [], T "B" [], T "C" [], T "D" [], T "A" []])
+
+ReleaseNotes : Doc
+ReleaseNotes =
+  {{
+  * Rename internal {type Cell} functions to be unique in more contexts.
+  * Keyed children are reconciled in `O(n log n)`. Siblings are compared by their last key segment, the common prefix stays put, and the children whose old positions form a longest increasing run ({Incremental.reconcile.stableIndices}) stay still while the others are relocated after their new predecessors.
+  * Fixed: a new child now moves with its predecessor. A rotate and insert, or a swap with an insert after it, used to leave the new child where its predecessor had been, because it was placed before the predecessor was relocated. `tests.relocateAndInsert` and `tests.swapAndInsert` cover it.
+  }}

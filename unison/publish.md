@@ -13,6 +13,7 @@ Each line is `push <remote> <local>`. A branch that is already pushed and unchan
 @dfreeman/proscenium/bench> push @nusentry/ink/perf-mount-compute @dfreeman/ink/perf-mount-compute
 @dfreeman/proscenium/bench> push @nusentry/ink/perf-r4 @dfreeman/ink/perf-r4
 @dfreeman/proscenium/bench> push @nusentry/ink/perf-r5 @dfreeman/ink/perf-r5
+@dfreeman/proscenium/bench> push @nusentry/ink/offer-1-ordering @dfreeman/ink/offer-1-ordering
 @dfreeman/proscenium/bench> push @nusentry/warp/perf @dfreeman/warp/perf
 @dfreeman/proscenium/bench> push @nusentry/warp/perf-r4 @dfreeman/warp/perf-r4
 @dfreeman/proscenium/bench> push @nusentry/warp/perf-r5 @dfreeman/warp/perf-r5
@@ -22,6 +23,7 @@ Each line is `push <remote> <local>`. A branch that is already pushed and unchan
 @dfreeman/proscenium/bench> push @nusentry/warp/offer-1-compare-eq @dfreeman/warp/offer-1-compare-eq
 @dfreeman/proscenium/bench> push @nusentry/warp/offer-2-list @dfreeman/warp/offer-2-list
 @dfreeman/proscenium/bench> push @nusentry/warp/offer-3-text @dfreeman/warp/offer-3-text
+@dfreeman/proscenium/bench> push @nusentry/proscenium/offer-stores @dfreeman/proscenium/offer-stores
 @dfreeman/proscenium/bench> push @nusentry/warp/guard-one-shot @dfreeman/warp/guard-one-shot
 @dfreeman/proscenium/bench> push @nusentry/warp/perf-r7-142 @dfreeman/warp/perf-r7-142
 @dfreeman/proscenium/bench> push @nusentry/proscenium/bench @dfreeman/proscenium/bench
