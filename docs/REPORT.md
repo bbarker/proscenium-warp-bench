@@ -1938,6 +1938,66 @@ What this says:
   - **One lookup of `document`.** `global "document"` goes through the boxed glue, and
     looking it up per node made 30,000 extra crossings for 1,000 rows.
 
+### A first prototype behind Proscenium's API
+
+`bench.tree`, on Proscenium `perf-r7-tree` (from `perf-r7-mini`), puts the floor's lessons
+behind Proscenium's own `Render` API. `docs/ProsceniumTree.md`, "A first prototype behind
+the API", has the design:
+- **Handlers:** one, where Proscenium and ink have two.
+- **Skipping:** a memo per element of its name, modifiers and body closure, which is
+  Proscenium's skip.
+- **Cells:** kept by path, and reached through `Update.send`.
+- **Reconcile:** the floor's, with a swap fast path.
+
+**The plain rows app, `bench.rows.ui`, runs on it unchanged.** It matches Leptos over 200
+random steps on two seeds. Its source is the same as on Proscenium with ink, so the
+comparison is the renderer alone. Round 7's fine-grained rows app needs `Keyed` and
+`Selector`, which the prototype does not have yet.
+
+Timed interleaved, medians of 9, load 4–6, until the DOM shows the result
+(`results/round7-tree-rows.json`):
+
+| Operation (ms) | Leptos | Round 7 (fine-grained) | Plain rows on ink | **Plain rows on the tree** |
+| --- | --- | --- | --- | --- |
+| create 1,000 rows | 26.3 | 84.8 | 81.0 | **55.2** |
+| replace 1,000 rows | 27.7 | 87.7 | 76.6 | **47.1** |
+| append 1,000 rows | 21.1 | 52.1 | 47.2 | 47.7 |
+| update every 10th row | 0.9 | 6.4 | 9.3 | **5.8** |
+| select a row | 0.6 | 1.3 | 7.7 | 6.2 |
+| swap two rows | 0.6 | 5.1 | 5.8 | **3.0** |
+| remove a row | 0.9 | 5.0 | 6.6 | **2.3** |
+| clear 2,000 rows | 16.3 | 34.6 | 21.0 | **15.1** |
+| create 10,000 rows | 167.1 | 571.0 | 511.9 | **317.8** |
+| clear 10,000 rows | 84.3 | 114.5 | 69.5 | **60.0** |
+| JS heap at 10,000 rows (MB) | 9.6, plus 21.8 linear | 153.2 | 123.4 | **93.6** |
+
+The counters, for creating 1,000 rows (`results/sites-rows-tree.json`,
+`results/boundary-rows-tree.json`):
+
+| | Plain rows on ink | Plain rows on the tree |
+| --- | --- | --- |
+| allocations a row | 3,511 | 2,344 |
+| handler operations a row | 31 | 11 |
+| boundary crossings | 32,026 | 32,003 |
+| update every 10th, allocations | 617,630 | 336,614 |
+| swap, allocations | 398,543 | 194,431 |
+| module, brotli | 40 KB | 24 KB |
+| terms warp emits, and its build | 484, 0.54 s | 267, 0.32 s |
+
+What this says:
+- **Keeping the API keeps most of the floor's gain.** Against ink on the same source,
+  creating rows takes 32–39% less time and small interactions 38–65% less.
+- **The gap to the floor is the API's cost:** a handler operation per element, a memo
+  input per element, and cells looked up by path. The floor creates 1,000 rows in 38.7 ms
+  (in the first run of this comparison, `round7-tree-first-rows.json`) against the
+  tree's 54.4.
+- **Select is not better,** because this app keeps the selection in its model and every
+  click re-runs the table's body. Round 7's `Selector` store is what makes it cheap, so
+  the stores are the next part to bring over.
+- **Without the swap fast path,** the general keyed reconcile over 998 rows, with keys
+  that are paths of `Any` segments, made swap slower than ink (14.0 against 8.1 ms in the
+  first run).
+
 ### One-shot continuations: what resumes twice
 
 The author hopes native wasm stack switching will let warp drop its CPS paths, at the

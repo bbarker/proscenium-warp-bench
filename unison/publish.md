@@ -44,5 +44,6 @@ Each line is `push <remote> <local>`. A branch that is already pushed and unchan
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r7w @dfreeman/proscenium/perf-r7w
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r7-142 @dfreeman/proscenium/perf-r7-142
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r7-mini @dfreeman/proscenium/perf-r7-mini
+@dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r7-tree @dfreeman/proscenium/perf-r7-tree
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r7-guard @dfreeman/proscenium/perf-r7-guard
 ```

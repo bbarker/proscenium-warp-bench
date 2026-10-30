@@ -176,6 +176,30 @@ The fuzz and your suite pass on it. Two harness issues, found on the way: the ha
 waits forever instead of reporting a failure on the native side of a
 `wasmTestWithChannel` test, or a JS exception inside wasm.
 
+## A first prototype behind your API
+
+`bench.tree` on Proscenium `perf-r7-tree` runs Proscenium's `Render` API on a tree of its
+own:
+- **One handler:** a single `Render` handler, with no ink.
+- **Cells:** `useCell` cells kept by path.
+- **The skip:** your own, a memo per element of its name, modifiers and body closure.
+- **Reconcile:** the floor's, with a swap fast path.
+
+`bench.rows.ui` runs on it unchanged and matches Leptos. Against the same source on ink:
+
+| | On ink | On the tree |
+| --- | --- | --- |
+| create 1,000 rows | 81.0 ms | 55.2 ms |
+| create 10,000 rows | 512 ms | 318 ms |
+| update every 10th | 9.3 ms | 5.8 ms |
+| allocations a row | 3,511 | 2,344 |
+| handler operations a row | 31 | 11 |
+| module, brotli | 40 KB | 24 KB |
+
+It does not yet have effects, providers, `Keyed` or `Selector`. So the cards and meals
+apps, and the fine-grained rows app, don't run on it yet. Bringing those over is the
+next step, if you want this direction.
+
 ## One-shot continuations
 
 You hoped stack switching would let warp drop CPS, at the cost of multi-shot

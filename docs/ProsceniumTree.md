@@ -140,6 +140,41 @@ Three things the floor needed now belong in the design:
   against round 7's 2,900. The tree should keep `Keyed` and `Selector`'s targeted
   updates rather than re-run a whole region's body.
 
+## A first prototype behind the API
+
+`bench.tree`, on Proscenium `perf-r7-tree`, is this note's tree for the part of the API the
+plain rows app uses:
+- **The handler:** one `Render` handler (`bench.tree.collect`) takes `node`,
+  `nodeWith`, `fragment`, `useCell` and `currentNamespace`, and builds a tree of
+  elements, text nodes and memos.
+- **The skip:** each element is a memo of its name, modifiers and body closure. That is
+  Proscenium's skip, made at the element as now, with the render's generation added to
+  the input when a cell under the element changed.
+- **Keys:** a node's key is its path. A region adds its key to the path, so a row keeps
+  its key when it moves.
+- **Cells:** kept in a map by path. `Update.send` addresses one through ink's `Message`
+  key, and every prefix of a changed cell's path is marked, so its ancestors re-run.
+- **Children:** the floor's reconcile, plus a swap fast path: after the prefix and suffix
+  trim, if the first and last children of what is left swapped places and nothing else
+  moved, only those two move.
+- **Listeners:** each element listens once per event name, through a cell holding its
+  current listeners, so a re-render swaps listeners without touching the DOM.
+
+`bench.rows.ui` runs on it unchanged, and matches Leptos over 200 steps on two seeds.
+Against the same source on ink (the report's "A first prototype behind Proscenium's API"):
+- **Creating and replacing rows:** 32–39% less time.
+- **Small interactions:** update every 10th, swap and remove take 38–65% less.
+- **Allocations:** two thirds of ink's per row, with 11 handler operations a row instead
+  of 31.
+- **Size:** the module is 24 KB brotli against 40 KB.
+
+Not in the prototype:
+- **API still missing:** `Effect`, providers, `Keyed`, `Selector`, `onCleanup`,
+  namespaces, and payloads other than a click's. So the cards and meals apps don't run
+  on it yet.
+- **Select:** costs the same as on ink. The plain rows app keeps the selection in its
+  model, so both re-run the whole table.
+
 ## Open questions for the prototype
 
 - Whether messages should name a node by path (a list of keys) or by a stable id handed

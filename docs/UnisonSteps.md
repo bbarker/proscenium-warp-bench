@@ -378,6 +378,17 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/proscenium/perf-r7-guard> compile bench.cards.s400i.build target/unison/frontend-bench/cards-400-build-guard
 ```
 
+- [ ] A first prototype of the tree behind Proscenium's API (`bench.tree`), on a branch of
+      `perf-r7-mini`, with the rows app built on it and, for comparison, on ink:
+
+```ucm
+@dfreeman/proscenium/perf-r7-mini> branch /perf-r7-tree
+@dfreeman/proscenium/perf-r7-tree> load unison/scratch/proscenium--perf-r7-tree.u
+@dfreeman/proscenium/perf-r7-tree> add
+@dfreeman/proscenium/perf-r7-tree> compile bench.tree.rows.build target/unison/frontend-bench/rows-build-tree2
+@dfreeman/proscenium/perf-r7-tree> compile bench.rows.build target/unison/frontend-bench/rows-build-plain
+```
+
 Suggested `history.comment` lines:
 
 - ink/perf: `keyed reconcile in O(n log n) by longest increasing run, new children move with a moved predecessor; compute_ lets a message re-run only the computation owning its cell`
@@ -399,3 +410,4 @@ Suggested `history.comment` lines:
 - proscenium/perf-r7-142: `on warp perf-r7-142 with Text by code point`
 - warp/guard-one-shot: `experiment: shift::continue poisons its data after the first resume, so a second resume of any continuation traps`
 - proscenium/perf-r7-guard: `perf-r7 on warp guard-one-shot, to show that nothing resumes a continuation twice`
+- proscenium/perf-r7-tree: `bench.tree: Proscenium's Render API on a tree of its own with one handler, cells by path and a memo per element; bench.rows.ui runs on it unchanged`
