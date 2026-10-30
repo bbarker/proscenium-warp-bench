@@ -219,6 +219,14 @@ repeat it.
     operation per element, it costs 13% more to create 1,000 rows and 24% more for
     10,000. Proscenium has two handlers today.
   - **Size:** the module is 18 KB brotli. warp builds it in 0.24 s.
+- **Stock warp miscounts `Text`** ("Text by code point"). A differential fuzz of 1,800
+  text operations fails on 1.4.2 within 24 operations. warp counts and orders `Text` in
+  UTF-16 units, so an emoji is two characters and a text `match` can miss its arm.
+  `offer-3-text` fixes it, standalone on 1.4.2, and so does `perf-r7-142`.
+- **One-shot continuations are enough for Proscenium and ink** ("One-shot continuations").
+  With every captured continuation made one-shot, the three apps pass every check and
+  suite. Only base's `Each` resumes twice. That answers the cost the author named for
+  dropping CPS in favour of stack switching.
 - **A Leptos limit we may hit:** the 1,600-card benchmark app puts 80 page components in
   one `view!`, and mounting it overflowed wasm's default 1 MB stack. This happened in both
   dev and release builds, as `memory access out of bounds`, and an 8 MB stack fixed it.

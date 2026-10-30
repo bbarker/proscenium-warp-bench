@@ -132,6 +132,9 @@ paid off for `compare`, `==` and `List`.
 | warp `perf-r7u`, `perf-r7w` | `Nat.toText` in Unison and in the DSL, for the comparison above | No: experiments |
 | Proscenium `perf-fine` … `perf-r5` | key hints as data, `elementWith`, `Keyed`, `Selector`, DOM sync bottom-up | If ink stays; `Keyed` and `Selector` either way |
 | Proscenium `perf-r7`, `bench-jfb` | the benchmark apps, including `bench.jfb` and `bench.jfbstock` for js-framework-benchmark | Bench code only |
+| warp `offer-3-text` | on 1.4.2, standalone: `Text` by code point, which fixes emoji splitting and missed text `match` arms; the differential text fuzz | Yes |
+| warp `guard-one-shot`, Proscenium `perf-r7-guard` | every continuation one-shot, to show that nothing in Proscenium or ink resumes twice | No: an experiment |
+| Proscenium `perf-r7-mini` | `bench.mini`, the floor for a tree without ink | Bench code only |
 
 The branches above are against 1.3.0. **`@dfreeman/warp/perf-r7-142` is all of the warp
 work worth taking, rebased onto 1.4.2.**
