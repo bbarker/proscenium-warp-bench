@@ -184,8 +184,67 @@ scratch/main> clone @dfreeman/warp/releases/1.3.0 @dfreeman/warp/perf-r4
 @dfreeman/proscenium/perf-r7> compile bench.meals.build target/unison/frontend-bench/meals-build-r7
 ```
 
-In the original working copy, the warp lib on `perf-r7` is `dfreeman_warp_r7b`. It was
-forked a second time after the equality fix was corrected to build on round 4's version.
+Each later change to warp `perf-r7` was picked up the same way, with
+`fork @dfreeman/warp/perf-r7: lib.dfreeman_warp_r7<x>` and
+`upgrade <previous> dfreeman_warp_r7<x>`. In the original working copy the lib is
+`dfreeman_warp_r7d`, after four forks:
+1. the boundary change;
+2. the equality fix redone on round 4's version;
+3. shared results;
+4. `Nat.toText`, `Text.indexOf` and a shared `()`.
+
+The js-framework-benchmark app is on `perf-r7` too (`bench.jfb`):
+
+```ucm
+@dfreeman/proscenium/perf-r7> load unison/scratch/proscenium--perf-r7.u
+@dfreeman/proscenium/perf-r7> add
+@dfreeman/proscenium/perf-r7> compile bench.jfb.build target/unison/frontend-bench/jfb-build-r7
+```
+
+- [ ] A builtin written in Unison instead of JS: `Nat.toText` (`Nat_toText.impl`, with a
+      test against UCM's own), on `@dfreeman/warp/perf-r7u`. It takes two loads, because
+      a `termLink` to a term defined in the same file does not parse. The alias is below
+      the fold of `warp--perf-r7u.u`, so load the file, `add`, then load a file holding
+      only the alias, and `update`. The timing app `bench.totext` is on Proscenium
+      `perf-r7`, and `perf-r7u` is `perf-r7` with that warp:
+
+```ucm
+@dfreeman/warp/perf-r7> branch /perf-r7u
+@dfreeman/warp/perf-r7u> load unison/scratch/warp--perf-r7u.u
+@dfreeman/warp/perf-r7u> add
+@dfreeman/warp/perf-r7u> test internal.runtime.replacements.unison_base.Nat_toText.impl
+@dfreeman/warp/perf-r7u> load <a file with the alias from below the fold>
+@dfreeman/warp/perf-r7u> update
+@dfreeman/proscenium/perf-r7> branch /perf-r7u
+@dfreeman/proscenium/perf-r7u> fork @dfreeman/warp/perf-r7u: lib.dfreeman_warp_r7u
+@dfreeman/proscenium/perf-r7u> upgrade dfreeman_warp_r7d dfreeman_warp_r7u
+@dfreeman/proscenium/perf-r7u> compile bench.totext.build target/unison/frontend-bench/totext-build-r7u
+```
+
+- [ ] The same builtin in warp's instruction DSL, on `@dfreeman/warp/perf-r7w`:
+
+```ucm
+@dfreeman/warp/perf-r7> branch /perf-r7w
+@dfreeman/warp/perf-r7w> load unison/scratch/warp--perf-r7w.u
+@dfreeman/warp/perf-r7w> update
+@dfreeman/proscenium/perf-r7> branch /perf-r7w
+@dfreeman/proscenium/perf-r7w> fork @dfreeman/warp/perf-r7w: lib.dfreeman_warp_r7w
+@dfreeman/proscenium/perf-r7w> upgrade dfreeman_warp_r7d dfreeman_warp_r7w
+@dfreeman/proscenium/perf-r7w> compile bench.totext.build target/unison/frontend-bench/totext-build-r7w
+```
+
+Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` for each, and
+`node bench/frontend-wasm/totext.mjs warp/totext-bare-r5i warp/totext-bare-r7 warp/totext-bare-r7u warp/totext-bare-r7w`.
+
+- [ ] The same app for stock Proscenium (`bench.jfbstock`, plain `useState` and a region
+      per row), on a branch of `bench`:
+
+```ucm
+@dfreeman/proscenium/bench> branch /bench-jfb
+@dfreeman/proscenium/bench-jfb> load unison/scratch/proscenium--bench-jfb.u
+@dfreeman/proscenium/bench-jfb> add
+@dfreeman/proscenium/bench-jfb> compile bench.jfbstock.build target/unison/frontend-bench/jfb-build-stock
+```
 
 Suggested `history.comment` lines:
 
@@ -199,5 +258,6 @@ Suggested `history.comment` lines:
 - proscenium/perf-r5: `DOM sync builds new subtrees bottom-up, by identity of the keys ink places children under, and batches removals under one parent`
 - warp/perf-r5: `List.:+ appends in place into a leaf's spare capacity, marked by a hole value`
 - proscenium/perf-r5m: `bench.meals: a meal planner page (week of day cards with totals, grocery list, recipe search, FLIP-animated day move, CSS-animated SVG mascot) and its timed build entry`
-- warp/perf-r7: `JS interop builtins take unboxed arguments and box their results in wasm (jsUnboxed); == compares a function with a closure by id in wasm`
-- proscenium/perf-r7: `perf-r5m on warp perf-r7`
+- warp/perf-r7: `JS interop, Nat.toText and Text.indexOf take unboxed arguments and box their results in wasm (jsUnboxed); == compares a function with a closure by id in wasm; compare, == and Boolean intrinsics return shared boxes`
+- proscenium/perf-r7: `perf-r5m on warp perf-r7; bench.jfb, the js-framework-benchmark app`
+- proscenium/bench-jfb: `bench.jfbstock, the js-framework-benchmark app for stock Proscenium`

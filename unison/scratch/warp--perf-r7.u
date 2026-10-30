@@ -5,13 +5,17 @@ Each parameter is passed according to its {type ValueType}:
 
 - `VText`: the JS string it holds;
 - `VForeign`: the `JSValue` wrapper it holds;
+- `VNat` and `VInt`: a `BigInt`, from the 64-bit integer (a `Nat` arrives signed, so read it with `BigInt.asUintN(64, n)`);
+- `VFloat`: a number;
 - any other kind: the Unison value itself, opaque to JS. A function value passed this way can be handed to `rt.callDirect`.
 
 As for {jsFunction}, the JS function's first argument is the runtime. Its result is boxed in wasm:
 
 - `Some VForeign`: the `JSValue` the function returns;
 - `Some VText`: the string it returns;
-- `None`: its return value is ignored and the result is `()`.
+- `Some VNat` or `Some VInt`: the `BigInt` it returns;
+- `Some VFloat`: the number it returns;
+- `None`: its return value is ignored and the result is `()`, one shared box.
 
 {jsFunction}'s glue reads each argument through an exported getter (`Text_getValue`, `Foreign_getValue`) and builds its result through another (`Foreign`, `Unit`). That made about four calls back into wasm for every DOM call a UI made.
 }}
@@ -22,18 +26,33 @@ internal.Replacement.jsUnboxed paramTypes resultType src =
     use List +:
     use Text ++
     externRef = abs.ref extern
+    rawType = cases
+      VNat   -> VN I64
+      VInt   -> VN I64
+      VFloat -> VN F64
+      _      -> externRef
     rt = import.global "runtime" "self" (global.const externRef)
     results = match resultType with
-      None   -> []
-      Some _ -> [externRef]
-    params = (None, externRef) +: List.map (_ -> (None, externRef)) paramTypes
+      None    -> []
+      Some ty -> [rawType ty]
+    params = (None, externRef) +: List.map (ty -> (None, rawType ty)) paramTypes
     jsFunc = import.func.named ("js." ++ humanReadableID name) "js" (refToWasmID name) (func.Signature.Signature params results ())
     (unitID, unitCtor) = constructorGlobal (termLink Unit)
+    unit = def.global (global.const (Runtime.internalRef InternalType.Value runtime)) do
+      pushTag VData
+      global.get unitID
+      i32.const unitCtor
+      newFixed (Runtime.internalType Values runtime) 0
+      struct.new (Runtime.valueType VData runtime)
+    unboxed index ty =
+      getDirectArg index runtime
+      ref.cast (Runtime.valueRef ty runtime)
+      struct.get (Runtime.valueType ty runtime) 1
     pushArg = cases
-      (index, VText)    ->
-        getDirectArg index runtime
-        ref.cast (Runtime.valueRef VText runtime)
-        struct.get (Runtime.valueType VText runtime) 1
+      (index, VText)    -> unboxed index VText
+      (index, VNat)     -> unboxed index VNat
+      (index, VInt)     -> unboxed index VInt
+      (index, VFloat)   -> unboxed index VFloat
       (index, VForeign) ->
         getDirectArg index runtime
         ref.cast (Runtime.valueRef VForeign runtime)
@@ -54,13 +73,59 @@ internal.Replacement.jsUnboxed paramTypes resultType src =
           any.convertExtern()
           struct.new (Runtime.valueType VForeign runtime)
         Some ty       -> struct.new (Runtime.valueType ty runtime)
-        None          ->
-          pushTag VData
-          global.get unitID
-          i32.const unitCtor
-          newFixed (Runtime.internalType Values runtime) 0
-          struct.new (Runtime.valueType VData runtime)
+        None          -> global.get unit
   NativeTerm (SigDirect arity) (Some src) builder
+
+internal.runtime.replacements.unison_base.Nat_toText : Replacement
+internal.runtime.replacements.unison_base.Nat_toText =
+  jsUnboxed [VNat] (Some VText) "(rt, n) => String(BigInt.asUintN(64, n))"
+
+{{
+`Text.indexOf needle haystack` for warp's output: JS's `indexOf` on the two strings, passed unboxed, and the `Optional Nat` built in wasm (`None` is one shared box). The index counts UTF-16 code units, as warp's other `Text` builtins do.
+}}
+internal.runtime.replacements.unison_base.Text_indexOf : Replacement
+internal.runtime.replacements.unison_base.Text_indexOf =
+  src = "(rt, needle, haystack) => BigInt(haystack.indexOf(needle))"
+  builder name runtime =
+    use Text ++
+    externRef = abs.ref extern
+    anyValueRef = Runtime.internalRef InternalType.Value runtime
+    valuesType = Runtime.internalType Values runtime
+    dataType = Runtime.valueType VData runtime
+    rt = import.global "runtime" "self" (global.const externRef)
+    jsIndexOf = import.func.named ("js." ++ humanReadableID name) "js" (refToWasmID name) (func.Signature.Signature [(None, externRef), (None, externRef), (None, externRef)] [VN I64] ())
+    (optionalID, someCtor) = constructorGlobal (termLink Optional.Some)
+    (_, noneCtor) = constructorGlobal (termLink Optional.None)
+    none = def.global (global.const anyValueRef) do
+      pushTag VData
+      global.get optionalID
+      i32.const noneCtor
+      newFixed valuesType 0
+      struct.new dataType
+    textArg index =
+      getDirectArg index runtime
+      ref.cast (Runtime.valueRef VText runtime)
+      struct.get (Runtime.valueType VText runtime) 1
+    defDirectFunc name runtime 2 do
+      found = FuncCtx.local (VN I64)
+      global.get rt
+      textArg 0
+      textArg 1
+      instr.call jsIndexOf
+      local.tee found
+      i64.const 0
+      i64.ltS()
+      atIndex _ =
+        pushTag VData
+        global.get optionalID
+        i32.const someCtor
+        pushTag VNat
+        local.get found
+        struct.new (Runtime.valueType VNat runtime)
+        newFixed valuesType 1
+        struct.new dataType
+      ifThenElse.withResult anyValueRef (_ -> global.get none) atIndex
+  NativeTerm (SigDirect 2) (Some src) builder
 
 internal.runtime.replacements.warp_js.JSValue_getProperty : Replacement
 internal.runtime.replacements.warp_js.JSValue_getProperty =

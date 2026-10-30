@@ -1,0 +1,44 @@
+{{
+`Nat.toText` written in warp's instruction DSL: the number stays in an unboxed `i64` local, each digit is a `wasm:js-string` `fromCharCode`, and the digits are joined with `wasm:js-string` `concat`, last digit first. V8 compiles both builtins inline, so the conversion makes no call into JS and allocates only the strings and the result's box.
+
+This is the DSL half of the prototype comparing ways to write warp's builtins; the Unison half is `Nat_toText.impl` on `perf-r7u`.
+}}
+internal.runtime.replacements.unison_base.Nat_toText : Replacement
+internal.runtime.replacements.unison_base.Nat_toText = wasmExpression 1 cases
+  runtime ->
+    use func *
+    fromCharCode = import.func "wasm:js-string" "fromCharCode" (param i32 => result (abs.ref extern))
+    concat = import.func "wasm:js-string" "concat" (param externref * param externref => result (abs.ref extern))
+    emptyText = stringGlobal ""
+    cases
+      env, vars ->
+        rest = FuncCtx.local (VN I64)
+        digits = FuncCtx.local externref
+        pushTag VText
+        env' = pushUnboxedVar VNat env (List.unsafeAt 0 vars)
+        local.set rest
+        global.get emptyText
+        local.set digits
+        instr.loop cases
+          continue ->
+            local.get rest
+            i64.const 10
+            i64.remU()
+            i32.wrapI64()
+            i32.const 48
+            i32.add()
+            instr.call fromCharCode
+            local.get digits
+            instr.call concat
+            local.set digits
+            local.get rest
+            i64.const 10
+            i64.divU()
+            local.tee rest
+            i64.eqz()
+            i32.eqz()
+            ifThen do br continue
+        local.get digits
+        asNonNull()
+        struct.new (Runtime.valueType VText runtime)
+        env'

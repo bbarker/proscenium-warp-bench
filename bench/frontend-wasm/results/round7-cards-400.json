@@ -1,0 +1,146 @@
+{
+  "suite": "cards-400",
+  "iterations": 10,
+  "at": "2026-10-30T13:25:11.659Z",
+  "load": [
+    4.43,
+    13.6,
+    15.51
+  ],
+  "cpus": 24,
+  "chromium": "149.0.7827.114",
+  "interleaved": true,
+  "loadAtStart": [
+    4.32,
+    13.89,
+    15.62
+  ],
+  "results": {
+    "leptos": {
+      "load (ready)": {
+        "median": 271.15,
+        "min": 251.4,
+        "max": 337.9
+      },
+      "toggle card 7 dom": {
+        "median": 0.8,
+        "min": 0.7,
+        "max": 1
+      },
+      "toggle card 7 frame": {
+        "median": 4.5,
+        "min": 2.8,
+        "max": 19.2
+      },
+      "toggle card 7 back dom": {
+        "median": 0.15,
+        "min": 0.1,
+        "max": 0.3
+      },
+      "toggle card 7 back frame": {
+        "median": 14.6,
+        "min": 3.3,
+        "max": 69.6
+      },
+      "toggle card 399 dom": {
+        "median": 0.15,
+        "min": 0,
+        "max": 0.4
+      },
+      "toggle card 399 frame": {
+        "median": 14.6,
+        "min": 9.6,
+        "max": 15.1
+      },
+      "dom nodes": {
+        "median": 2029,
+        "min": 2029,
+        "max": 2029
+      }
+    },
+    "warp-r5i": {
+      "load (ready)": {
+        "median": 94.5,
+        "min": 86.5,
+        "max": 400.2
+      },
+      "toggle card 7 dom": {
+        "median": 1.5,
+        "min": 1.4,
+        "max": 1.7
+      },
+      "toggle card 7 frame": {
+        "median": 4.1,
+        "min": 3.5,
+        "max": 5.8
+      },
+      "toggle card 7 back dom": {
+        "median": 0.5,
+        "min": 0.4,
+        "max": 0.8
+      },
+      "toggle card 7 back frame": {
+        "median": 13.25,
+        "min": 3.6,
+        "max": 19
+      },
+      "toggle card 399 dom": {
+        "median": 0.3,
+        "min": 0.2,
+        "max": 0.9
+      },
+      "toggle card 399 frame": {
+        "median": 14.45,
+        "min": 12,
+        "max": 16.7
+      },
+      "dom nodes": {
+        "median": 2029,
+        "min": 2029,
+        "max": 2029
+      }
+    },
+    "warp-r7": {
+      "load (ready)": {
+        "median": 92.5,
+        "min": 85.6,
+        "max": 115.6
+      },
+      "toggle card 7 dom": {
+        "median": 1.6,
+        "min": 1.4,
+        "max": 1.9
+      },
+      "toggle card 7 frame": {
+        "median": 4.3,
+        "min": 3.4,
+        "max": 14.2
+      },
+      "toggle card 7 back dom": {
+        "median": 0.5,
+        "min": 0.4,
+        "max": 0.8
+      },
+      "toggle card 7 back frame": {
+        "median": 12.45,
+        "min": 4.1,
+        "max": 18.8
+      },
+      "toggle card 399 dom": {
+        "median": 0.3,
+        "min": 0.2,
+        "max": 0.4
+      },
+      "toggle card 399 frame": {
+        "median": 14.55,
+        "min": 11.7,
+        "max": 15.3
+      },
+      "dom nodes": {
+        "median": 2029,
+        "min": 2029,
+        "max": 2029
+      }
+    }
+  }
+}

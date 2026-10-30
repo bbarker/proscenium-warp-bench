@@ -1,0 +1,32 @@
+{{
+`Nat.toText` written in Unison, for warp to compile with the rest of a program instead of calling JS: the digits come from a match on each remainder, and `Text.++` joins them (in wasm, the `wasm:js-string` `concat` builtin).
+
+This is the prototype for writing warp's builtins in Unison rather than in its instruction DSL. It needs no knowledge of warp's runtime and can be tested against UCM's own `Nat.toText` like any Unison function.
+}}
+internal.runtime.replacements.unison_base.Nat_toText.impl : Nat -> Text
+internal.runtime.replacements.unison_base.Nat_toText.impl n =
+  digit = cases
+    0 -> "0"
+    1 -> "1"
+    2 -> "2"
+    3 -> "3"
+    4 -> "4"
+    5 -> "5"
+    6 -> "6"
+    7 -> "7"
+    8 -> "8"
+    _ -> "9"
+  go rest acc = if rest Nat.< 10 then digit rest Text.++ acc else go (Nat.div rest 10) (digit (Nat.mod rest 10) Text.++ acc)
+  go n ""
+
+internal.runtime.replacements.unison_base.Nat_toText.impl.tests.agreesWithUCM : [Result]
+internal.runtime.replacements.unison_base.Nat_toText.impl.tests.agreesWithUCM =
+  use Nat *
+  samples = [0, 1, 9, 10, 99, 100, 7919, 65535, 4294967296, 18446744073709551615] List.++ List.map (i -> i * 7919 * 104729) (Nat.range 0 200)
+  test.verify do
+    List.foreach (n -> ensureEqual (Nat_toText.impl n) (Nat.toText n)) samples
+
+---
+
+internal.runtime.replacements.unison_base.Nat_toText : Replacement
+internal.runtime.replacements.unison_base.Nat_toText = termAlias (termLink Nat_toText.impl)

@@ -1,19 +1,19 @@
 {
  "suite": "rows",
  "iterations": 1,
- "at": "2026-10-30T13:20:21.119Z",
+ "at": "2026-10-30T13:32:22.651Z",
  "load": [
-  32.62,
-  25.16,
-  18.47
+  7.39,
+  6.82,
+  11.35
  ],
  "cpus": 24,
  "chromium": "149.0.7827.114",
  "interleaved": false,
  "loadAtStart": [
-  34.2,
-  25.22,
-  18.41
+  6.03,
+  6.55,
+  11.28
  ],
  "results": {
   "leptos": {
@@ -706,8 +706,6 @@
     "export Optional_Some <- import js:ffi let n=e.Foreign_getValue(a);if(typeof n.get()==\"function\"){let s=e.List_size(t),i=Array(s)": 1,
     "export seqEmpty <- JS": 1,
     "import js:##Nat.toText": 1000,
-    "export Nat_getValue <- import js:##Nat.toText": 1000,
-    "export Text <- import js:##Nat.toText": 1000,
     "import js:ffi e.js.JSValue.unanchored(a.get()?.[t])": 1,
     "import js:ffi e.js.JSValue.unanchored(n.get()[t](a))": 10000,
     "import js:ffi s.get()[t](a,n)}": 7005,
@@ -829,8 +827,6 @@
     "export Optional_Some <- import js:ffi let n=e.Foreign_getValue(a);if(typeof n.get()==\"function\"){let s=e.List_size(t),i=Array(s)": 1,
     "export seqEmpty <- JS": 1,
     "import js:##Nat.toText": 1000,
-    "export Nat_getValue <- import js:##Nat.toText": 1000,
-    "export Text <- import js:##Nat.toText": 1000,
     "import js:ffi e.js.JSValue.unanchored(a.get()?.[t])": 1,
     "import js:ffi e.js.JSValue.unanchored(n.get()[t](a))": 10000,
     "import js:ffi s.get()[t](a,n)}": 7005,
@@ -859,8 +855,6 @@
     "export Optional_Some <- import js:ffi let n=e.Foreign_getValue(a);if(typeof n.get()==\"function\"){let s=e.List_size(t),i=Array(s)": 1,
     "export seqEmpty <- JS": 1,
     "import js:##Nat.toText": 1000,
-    "export Nat_getValue <- import js:##Nat.toText": 1000,
-    "export Text <- import js:##Nat.toText": 1000,
     "import js:ffi e.js.JSValue.unanchored(a.get()?.[t])": 1,
     "import js:ffi e.js.JSValue.unanchored(n.get()[t](a))": 10000,
     "import js:ffi s.get()[t](a,n)}": 7005,
@@ -914,8 +908,6 @@
     "export Optional_Some <- import js:ffi let n=e.Foreign_getValue(a);if(typeof n.get()==\"function\"){let s=e.List_size(t),i=Array(s)": 1,
     "export seqEmpty <- JS": 1,
     "import js:##Nat.toText": 10000,
-    "export Nat_getValue <- import js:##Nat.toText": 10000,
-    "export Text <- import js:##Nat.toText": 10000,
     "import js:ffi e.js.JSValue.unanchored(a.get()?.[t])": 1,
     "import js:ffi e.js.JSValue.unanchored(n.get()[t](a))": 100000,
     "import js:ffi s.get()[t](a,n)}": 70005,

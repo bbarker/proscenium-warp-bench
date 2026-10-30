@@ -187,6 +187,16 @@ repeat it.
   The fixes, in order: unwrap arguments in wasm instead of in the glue; allocate less in
   generic and partial application; compile handlers that resume once, at the end, as
   direct calls; finish `==` and `compare` in wasm. See "Measured attribution".
+- **Round 7 did the first and the last.**
+  - **Boundary:** warp's JS interop takes its arguments unboxed, `==` compares functions
+    in wasm, and comparisons share their result boxes. warp now crosses the boundary as
+    often as Leptos: 32,046 times to create 1,000 rows, against 33,007, down from
+    197,231.
+  - **Speed:** lists build 5–23% faster (create 1,000 91.5 to 86.5 ms, append 59.1 to
+    45.8, create 10,000 697 to 608), and interactions are unchanged.
+  - **What is left:** allocation and ability operations. The next step is a tree of
+    Proscenium's own (`docs/ProsceniumTree.md`), the author's preferred direction,
+    which removes one of the two ability operations per element.
 - **A Leptos limit we may hit:** the 1,600-card benchmark app puts 80 page components in
   one `view!`, and mounting it overflowed wasm's default 1 MB stack. This happened in both
   dev and release builds, as `memory access out of bounds`, and an 8 MB stack fixed it.
@@ -1417,32 +1427,182 @@ The meals page has the same shape, with 54,000–65,000 allocations per one-meal
    function kinds:** 166,000 allocations and 4,011 JS calls per 1,000 rows.
 5. **`Text.indexOf` and `Nat.toText` move into wasm.**
 
+### Round 7: the boundary, after the review
+
+Added 2026-10-30, after "Measured attribution". The branches are
+`@dfreeman/warp/perf-r7` (from `perf-r4`, the warp under round 5) and
+`@dfreeman/proscenium/perf-r7` (from `perf-r5m`, which is round 5 plus the meals page).
+The scratch files are `unison/scratch/warp--perf-r7.u` and `proscenium--perf-r7.u`.
+
+What changed, all in warp:
+
+- **JS interop takes its arguments unboxed.**
+  - `internal.Replacement.jsUnboxed` is a new kind of builtin. Its JS function receives
+    a `Text` as the JS string, a `JSValue` as its wrapper, and a `Nat`, `Int` or
+    `Float` as a JS number or `BigInt`. wasm boxes the result.
+  - Round 4's 13 interop functions use it (`invoke*`, `getProperty`, `setProperty*`,
+    `callback1_`), and so do `Nat.toText` and `Text.indexOf`. For `Text.indexOf` the
+    `Optional` result is built in wasm.
+  - The JS glue no longer calls exported getters to read its arguments, or constructors
+    to build its result.
+- **`==` compares a function with a closure by id in wasm,** on top of round 4's equality.
+  - That is the comparison ink's skip check makes for every region it re-runs. It used to
+    fall through to JS, which walked the values with eight calls back into wasm.
+  - A first version of the change started from round 1's equality and dropped round 4's
+    `List` and `Array` cases, sending those comparisons to JS. The boundary counts showed
+    it at once: "update every 10th" went to 75,000 crossings. It was redone on round 4's
+    code before any timing.
+- **Results that can be shared are.**
+  - `Universal.compare` returns one of three shared `Int` boxes.
+  - `==` and every intrinsic with a `Boolean` result (`Nat.<`, `Int.==`, ...) return one
+    of two shared `Boolean` boxes (`internal.Replacement.sharedValues`).
+  - The interop functions that return nothing return a shared `()`, and `Text.indexOf`
+    a shared `None`.
+
+  Unison values are immutable and compared by value, so sharing a box changes nothing a
+  program can observe.
+
+Checks:
+- warp's `tests` pass.
+- The rows table matches Leptos through 200 random operations on two seeds.
+- The meals page matches through 240 steps on two seeds.
+- The 400-card page matches round 5's markup after every step of its script.
+
+**At the boundary** (`results/boundary-*.json`), calls in either direction:
+
+| Operation | Leptos | Round 5 | Round 7 |
+| --- | --- | --- | --- |
+| rows, create 1,000 | 33,007 | 197,231 | **32,046** |
+| rows, update every 10th | 103 | 4,125 | **122** |
+| rows, swap | 11 | 234 | **44** |
+| meals, plan the week | 3,785 | 22,490 | **3,775** |
+| meals, shuffle a meal | 1,851 | 1,991 | **300** |
+| meals, wave | 4 | 1,295 | **268** |
+| cards-400, page ready | 652,880 | 57,562 | **10,883** |
+
+warp now crosses the boundary about as often as Leptos, or less. The JS glue calls back
+into wasm about 10 times per operation (the event's entry and the microtask flush), down
+from 161,186 for creating 1,000 rows. The meals page's remaining imports are DOM calls and
+`Text.indexOf`, which is still a JS call, now unboxed. It is called 240 times per run of
+the search: the search re-runs on every root re-render, which is the Proscenium question
+noted under "Measured attribution".
+
+**Inside the module**, creating 1,000 rows after wasm-opt (`results/sites-rows-r7.json`,
+taken before `Nat.toText`, `Text.indexOf` and the shared `()` changed):
+
+- allocations fall from 4,572 a row to 4,356, a 5% cut;
+- boxed numbers fall from 436 to 270;
+- `Boolean`s drop out of the most-allocated types;
+- swap allocates 12% less and "update every 10th" 7% less.
+
+**Timings** (`results/round7-*.json`, medians of 10, load 4–5).
+- **Method:** the implementations were run interleaved, one iteration of each in turn
+  (`BENCH_INTERLEAVE=1`), so a change of load reaches all of them alike. Another session
+  was building on the machine during the day, with the load between 17 and 37 at times,
+  and an earlier run made that way had to be thrown away.
+- **Build:** the round 7 build is the one with shared results, before `Nat.toText`,
+  `Text.indexOf` and `()`.
+
+| Operation (ms, until the DOM shows it) | Leptos | Round 5 | Round 7 |
+| --- | --- | --- | --- |
+| create 1,000 rows | 27.0 | 91.5 | **86.5** |
+| replace 1,000 rows | 27.2 | 95.7 | **82.6** |
+| append 1,000 rows | 21.5 | 59.1 | **45.8** |
+| create 10,000 rows | 171.7 | 696.6 | **608.0** |
+| clear 10,000 rows | 84.7 | 118.3 | 117.9 |
+| swap two rows | 0.6 | 4.9 | 4.4 |
+| remove a row | 1.0 | 5.6 | 5.2 |
+| select a row | 0.6 | 0.9 | 0.6 |
+| update every 10th | 0.9 | 6.3 | 7.9 |
+| clear 2,000 rows | 17.7 | 22.5 | 42.4 |
+| meals: plan the week | 5.1 | 11.3 | 10.8 |
+| meals: bring back 240 search results | 2.1 | 9.8 | 9.3 |
+| meals: shuffle a meal | 2.2 | 2.0 | 2.1 |
+| cards-400: page ready | 271.2 | 94.5 | 92.5 |
+
+What it shows:
+
+- **Building lists got 5–23% faster.** That is consistent with the profile, which had about
+  10 ms of create-1,000 in crossings. A second interleaved run of 15 gave the same
+  picture: create 1,000 91.1 to 84.8 ms, replace 92.1 to 81.7, append 56.7 to 47.8,
+  create 10,000 663 to 589.
+- **Interactions are unchanged,** within the spread of 1–5 ms they had, since they
+  crossed the boundary little before.
+- **Clear 2,000 is slower in the suite and nowhere else.** In the suite it is 38–42 ms
+  against 22–24 ms, in both interleaved runs, though round 7 allocates and crosses less
+  for it (1.34 million allocations against 1.47 million, 43 crossings against 229).
+  Timed alone, or after the same sequence of operations, it is the same in both:
+  22.6 ms against 22.4, and 23.8 against 25.0, with or without a forced garbage
+  collection first. The likeliest cause is a collection now landing inside the timed
+  window of the suite's clear, since allocation before it changed. That is to be
+  confirmed with a trace. "Update every 10th" has a wide spread (5–11 ms) and moved
+  within it.
+- **What is left is allocation and dispatch,** as "Measured attribution" said: 4,356
+  allocations and 41 ability operations per row. Most of those come from how ink and
+  Proscenium's code is compiled (argument arrays, data, continuations, closures). That
+  is the work of "A tree of Proscenium's own" (`docs/ProsceniumTree.md`) and of warp's
+  continuation handling, below.
+
+#### Four ways to write a builtin
+
+The author's reason for leaving builtins in JS was the effort of writing them by hand in
+warp's instruction DSL. `Nat.toText`, called for every row's label, was written four
+ways. Each version was timed formatting a million numbers of about 15 digits
+(`bench.totext` on Proscenium `perf-r7`, `bench/frontend-wasm/totext.mjs`, median of 9,
+interleaved, Node 24):
+
+| Version | Branch | ms | Lines | Module |
+| --- | --- | --- | --- | --- |
+| JS, unboxed (`jsUnboxed`) | warp `perf-r7` | **40.5** | 1 | 19,251 B |
+| JS through the old glue (`jsFunction`) | warp `perf-r4` (round 5) | 80.5 | 1 | 19,207 B |
+| instruction DSL: `fromCharCode` per digit, `concat` | warp `perf-r7w` | 196.0 | 30 | 19,341 B |
+| Unison, aliased in as the builtin | warp `perf-r7u` | 337.5 | 14 | 19,630 B |
+
+- **Unboxed JS is the fastest** where the work is a JS primitive, here
+  `String(BigInt)`.
+- **The DSL version** builds a 15-digit number from 15 one-character strings and 15
+  concatenations. Collecting the digits in an `i16` array and making one string with
+  `fromCharCodeArray` should close most of that gap.
+- **The Unison version** is the easiest to write and to test: an ordinary test against
+  UCM's own `Nat.toText` passes on 210 samples. But warp boxes every intermediate `Nat`
+  it computes, so it is the slowest.
+
+So pure wasm pays where the work is arithmetic or data structure, as `compare`, `==` and
+`List` did. A prelude of builtins written in Unison waits on warp keeping local
+arithmetic unboxed.
+
+Two things found on the way:
+- **`termLink` in the same file:** an alias to a term defined in the same scratch file
+  does not parse, so the Unison version is installed in two loads.
+- **Builtin signatures:** V8 checks a builtin import's exact signature. `fromCharCode`
+  and `concat` return a non-null `(ref extern)`, and a module declaring `externref` fails
+  to instantiate. warp's test runner then waits forever for an answer.
+
 ### Next experiments, by expected payoff
 
 Re-ranked on 2026-10-30. Two earlier items are dropped: ahead-of-time unboxing, which
 wasm-opt already does where it is easy, and direct calls for ability-free functions,
-which warp already makes.
+which warp already makes. Two are done: the attribution ("Measured attribution") and the
+boundary (round 7).
 
-1. **Measure what allocates and what calls through `apply*`** ("Measured attribution",
-   below). Garbage collection is the largest single cost left, 20 ms of create-1,000, and
-   Chromium's heap profiler cannot see inside wasm.
-2. **warp: builtins from JS into wasm,** in the order the call counts give, then closed-world
-   mode measured again on a narrower boundary.
-3. **warp: continuation handling.**
+1. **Proscenium: a tree of its own instead of ink,** the author's preferred direction,
+   behind the current API (`docs/ProsceniumTree.md`). Each element is two ability
+   operations today, one Proscenium's and one ink's, plus ink's records, keys and `Delta`
+   values.
+2. **warp: continuation handling.**
    - Compile a handler that resumes once, in tail position, as a direct call.
      ink's `reconcile.handler`, which every element goes through, has that shape: it
-     resumes once and re-handles with new state.
+     resumes once and re-handles with new state. Each operation now costs a frame-list
+     walk, 4 allocations to capture, a copy of the frames on resume, and 5 to re-handle.
    - Give calls in from JS (event listeners, microtasks) a cheaper entry than
      `callDirect`'s root continuation.
    - Native stack switching later.
-4. **Proscenium: a tree of its own instead of ink,** the author's preferred direction,
-   behind the current API.
-5. **Proscenium: fewer crossings into JS per row,** by cloning templates or by sending
-   each batch of DOM operations to one JS function. The ceiling is about 10 ms of
-   create-1,000 (above).
+3. **warp: the rest of the builtins in wasm,** `Text`'s operations over the
+   `wasm:js-string` builtins first, then closed-world mode measured again on the narrower
+   boundary.
 4. **ink: an index of children by segment** in each record, so that delivering a message
    costs `O(log n)` instead of a walk of all the siblings. This is for update every 10th
-   and select.
+   and select, and is superseded if Proscenium stops using ink.
 5. **The dev loop.** Build a `CodeCache` base module that exposes an async `hotSwap`,
    then on every edit:
    1. On the host, build a delta with `warp.incremental`, from the build record kept on
@@ -1473,6 +1633,17 @@ which warp already makes.
   - `profile.mjs`: CPU profiles.
   - `consistency.mjs`: the table-for-table check.
   - `meals-check.mjs`: the same check for the meals page.
+  - `boundary.nu`: summarises `BENCH_COUNT=1` runs of `runtime.mjs`, which count every
+    call between wasm and JS.
+  - `instrument.nu` and `sites.nu`: put counters into a copy of a module (function entries,
+    allocations, indirect calls, runtime helpers) and summarise them.
+  - `totext.mjs`: times a builtin's implementations against each other in Node
+    (`Nat.toText`: JS, unboxed JS, Unison, instruction DSL).
+- `bench/js-framework-benchmark/`: the Proscenium entry for js-framework-benchmark
+  (`keyed-proscenium/`), `install.nu` to put it into a checkout, and `summary.nu` to
+  tabulate a run.
+- `docs/ProsceniumTree.md`: the design note for a tree of Proscenium's own in place of ink.
+- `docs/ReviewResponse.md`: the summary of the work since the author's review.
   - `leptos/`: the Rust copies.
   - `results/*.jsonl`: every measurement, with its load average.
   - `results/round*-*.json` and `.log`: per-round runs and consistency checks.

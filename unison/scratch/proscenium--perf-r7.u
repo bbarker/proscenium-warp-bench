@@ -55,3 +55,26 @@ bench.jfb.build = do
         Some config -> report ("jfb-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" mountMain)
         None -> printLine ("unknown config: " ++ configName)
     _ -> printLine "usage: <bare|debug> <outDir>"
+
+{{ Formats `count` numbers spread over the range of `Nat` and counts how many came out as `"0"`, so that each call's text is used. }}
+bench.totext.loop : Nat -> Nat
+bench.totext.loop count =
+  use Nat * + ==
+  go index found =
+    if index == count then found
+    else
+      text = Nat.toText (index * 2654435761)
+      go (index + 1) (if text Text.== "0" then found + 1 else found)
+  go 0 0
+
+{{ `run bench.totext.build <bare|debug> <outDir>`: a module whose `main` formats a million numbers with `Nat.toText`, for timing a builtin's implementation from JS. }}
+bench.totext.build : '{IO, Exception} ()
+bench.totext.build = do
+  use Text ++
+  runLoop _ = ignore (bench.totext.loop 1000000)
+  match getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config -> report ("totext-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" runLoop)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: <bare|debug> <outDir>"

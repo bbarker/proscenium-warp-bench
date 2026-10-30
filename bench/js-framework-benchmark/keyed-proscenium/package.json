@@ -6,7 +6,10 @@
   "js-framework-benchmark": {
     "frameworkVersion": "0.4.3-perf-r7",
     "frameworkHomeURL": "https://share.unison-lang.org/@dfreeman/proscenium",
-    "language": "Unison"
+    "language": "Unison",
+    "issues": [
+      1139
+    ]
   },
   "scripts": {
     "build-prod": "echo This is a no-op: bundled-dist is prebuilt, because building it needs UCM and binaryen. See README.md.",
