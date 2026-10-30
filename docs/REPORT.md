@@ -1738,6 +1738,74 @@ Two things found on the way:
   and `concat` return a non-null `(ref extern)`, and a module declaring `externref` fails
   to instantiate. warp's test runner then waits forever for an answer.
 
+#### Text by code point: a differential fuzz, and a bug in stock warp
+
+Phase 3 of the plan asked for Unison's `Text` semantics to be pinned by a differential
+test before more of `Text` moved into wasm. `tests.builtins.textFuzz` is modelled on round
+4's list fuzz:
+- **The operations:** 1,800 pseudo-random ones, from three seeds:
+  - sizes and slices;
+  - `reverse` and both directions of the char lists;
+  - `indexOf`, `compare`, `repeat`, `split`;
+  - case changes and UTF-8 round trips;
+  - patterns, and a `match` on text literals.
+- **The texts:** a pool seeded with ASCII, accented and CJK text, emoji, a skin-tone
+  modifier, astral letters (𝔘𝔫𝔦𝔠𝔬𝔡𝔢), a combining mark and U+FF61.
+- **The check:** each result is described by its UTF-8 bytes. The trace is computed
+  natively in UCM and in wasm, and the test fails on the first line that differs.
+
+**Stock warp 1.4.2 fails it within 24 operations on every seed.** Unison counts `Text` in
+code points, and warp's JS builtins count UTF-16 units:
+
+| | UCM | warp 1.4.2 |
+| --- | --- | --- |
+| `Text.size "a😀b"` | 3 | 4 |
+| `Text.size "👍🏽 ok"` | 5 | 7 |
+| `Text.take 2 "a😀b"` | `a😀` | `a` and half a surrogate pair |
+| `Text.reverse`, `Text.toCharList` | by code point | `split('')`, which breaks pairs |
+| `Text.indexOf` | code points | UTF-16 index |
+| `Universal.compare`, `Text.<` | code point order | UTF-16 order: 😀 sorts below ｡ (U+FF61) |
+
+The ordering difference has a consequence beyond `compare`:
+- **How a `match` is compiled:** warp sorts the literals of a `match` on text by Unison's
+  order when it builds the module (`BText.emit`). At run time it binary-searches them with
+  `CompareStrings`, which was the UTF-16 `wasm:js-string` `compare`.
+- **What breaks:** a match over `"a"`, `"｡"`, `"😀"`, ... can miss an arm whose literal
+  is outside the Basic Multilingual Plane. A test of nine such literals passes natively
+  and fails in wasm on 1.4.2.
+
+Round 7's wasm versions of `size`, `take`, `drop`, `uncons`, `unsnoc` and `reverse`
+had kept the UTF-16 semantics on purpose, to match the JS they replaced.
+
+**The fix**, `@dfreeman/warp/offer-3-text`, is on 1.4.2 and stands alone:
+- **The builtins:** `size`, `take`, `drop`, `uncons`, `unsnoc`, `reverse`, `toCharList`
+  and `indexOf` work in code points.
+- **Patterns:** the engine steps over a whole code point for a character class and a
+  lookbehind.
+- **`CompareStrings`:** now a wasm loop over `charCodeAt`. At the first difference it
+  moves surrogates above U+E000–U+FFFF, which gives code point order. `Text.<` and its
+  siblings call it, so a text `match` finds its arm.
+- **`Universal.compare`:** its JS orders `Text` and `Char` by code point.
+
+The fuzz and warp's full suite pass on it. On `perf-r7-142`, the same fix comes with round
+7's wasm builtins rewritten as code point loops over `charCodeAt`. The text fuzz, the list
+fuzz and warp's suite pass there too. Proscenium `perf-r7-142`, upgraded to it, still
+matches Leptos on rows and meals, and its cards markup is unchanged at every step. The
+time to the DOM is unchanged too (`results/round7-text-rows.json`,
+`round7-text-meals.json`, interleaved, load 2–3), before and after:
+- update every 10th: 7.2 and 5.5 ms;
+- create 1,000: 82.6 and 83.4;
+- planning the week: 9.6 and 10.0.
+
+Two things found on the way, in warp's test harness, which waits forever instead of
+reporting:
+- the native side of a `wasmTestWithChannel` test failing;
+- a JS exception thrown inside wasm, such as the `TypeError` from a JS builtin that
+  returns a JS list where the module expects round 4's wasm list.
+
+A Unison failure inside wasm is reported. So the fuzz compares on the native side and
+sends the first difference back for the wasm side to fail on.
+
 ### A floor for a tree without ink
 
 `docs/ProsceniumTree.md` proposes a tree of Proscenium's own in place of ink. Before

@@ -148,6 +148,31 @@ work worth taking, rebased onto 1.4.2.**
 
   Each passes your tests; the second also passes the list fuzz test.
 
+## `Text` by code point: a bug in stock warp
+
+A differential text fuzz (`tests.builtins.textFuzz`) runs 1,800 text operations natively
+and in wasm, over emoji, astral letters and U+FF61. Stock 1.4.2 fails it within 24
+operations on every seed:
+
+- **Counting:** `Text.size "a😀b"` is 4 in wasm and 3 in UCM. `take`, `drop`, `uncons`,
+  `unsnoc`, `reverse` and `toCharList` split an emoji into two lone surrogates, and
+  `indexOf` returns a UTF-16 index.
+- **Ordering:** `Universal.compare` and `Text.<` order by UTF-16 unit, which sorts 😀
+  below ｡.
+- **A text `match` can miss its arm.** `BText.emit` sorts a match's literals by
+  Unison's order at build time, then binary-searches them at run time with
+  `CompareStrings`, the UTF-16 `compare`.
+
+`offer-3-text` fixes all three, standalone on 1.4.2:
+- the eight builtins and the pattern engine's steps work in code points;
+- `CompareStrings` is a code point loop over `charCodeAt`, which `Text.<` and its
+  siblings call;
+- `Universal.compare`'s JS orders `Text` and `Char` by code point.
+
+The fuzz and your suite pass on it. Two harness issues, found on the way: the harness
+waits forever instead of reporting a failure on the native side of a
+`wasmTestWithChannel` test, or a JS exception inside wasm.
+
 ## A floor for a tree without ink
 
 Before building a tree behind Proscenium's API, we measured how fast one could be with no

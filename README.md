@@ -82,7 +82,8 @@ clone of the upstream project named in the first row, and the report writes them
 | [`perf-r7w`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7w) | `perf-r7` with `Nat.toText` in the instruction DSL (an experiment: 5 times slower than unboxed JS). | round 7 |
 | [`offer-1-compare-eq`](https://share.unison-lang.org/@nusentry/warp/code/offer-1-compare-eq) | On warp 1.4.2: round 1 only, `compare` and `==` in wasm with 1.4.2's JS as the fallback. Passes warp's tests. | to offer |
 | [`offer-2-list`](https://share.unison-lang.org/@nusentry/warp/code/offer-2-list) | `offer-1` + round 4's wasm `List` and its fuzz test. Passes warp's tests and the fuzz test. | to offer |
-| [`perf-r7-142`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7-142) | **All of the above that is worth taking, rebased onto warp 1.4.2:** rounds 1, 4 and 7, with 1.4.2's `Universal.compare` as the JS fallback. warp's tests and the list fuzz test pass. | round 7 |
+| [`offer-3-text`](https://share.unison-lang.org/@nusentry/warp/code/offer-3-text) | On warp 1.4.2, standalone: `Text` by code point, as Unison counts and orders it. Stock warp counts UTF-16 units, splits emoji, and can miss a text `match` arm. Includes `tests.builtins.textFuzz`, a differential test of 1,800 text operations. Passes warp's tests and the fuzz. | to offer |
+| [`perf-r7-142`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7-142) | **All of the above that is worth taking, rebased onto warp 1.4.2:** rounds 1, 4 and 7, with 1.4.2's `Universal.compare` as the JS fallback, and `offer-3-text`'s `Text` by code point (round 7's wasm `Text` builtins rewritten as code point loops). warp's tests, the list fuzz and the text fuzz pass. | round 7 |
 
 A note on 1.3.0: Proscenium 0.4.3, which the benchmark builds on, uses warp 1.3.0. The warp changes
 replace whole definitions as they were in 1.3.0, so apply them to a 1.3.0 clone and not to a newer

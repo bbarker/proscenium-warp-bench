@@ -316,6 +316,32 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/warp/offer-2-list> update
 ```
 
+- [ ] `Text` by code point, standalone on 1.4.2 (`offer-3-text`): the eight builtins
+      that counted UTF-16 units, the pattern engine's steps, `CompareStrings` as a code
+      point loop (which `Text.<` and its siblings now call, and which a text `match`
+      binary-searches with), `Universal.compare`'s JS order for `Text` and `Char`, and the
+      differential `tests.builtins.textFuzz`. The same changes, with round 7's wasm
+      `Text` builtins rewritten as code point loops, are in `warp--perf-r7-142.u`.
+
+```ucm
+@dfreeman/warp/releases/1.4.2> branch /offer-3-text
+@dfreeman/warp/offer-3-text> load unison/scratch/warp--offer-3-text.u
+@dfreeman/warp/offer-3-text> update
+@dfreeman/warp/offer-3-text> run tests.builtins.textFuzz.suite
+@dfreeman/warp/offer-3-text> run tests
+```
+
+  On `perf-r7-142` the merge file carries the same fix. A second load of it brings an
+  existing branch up to date, and Proscenium `perf-r7-142` then moves to it:
+
+```ucm
+@dfreeman/warp/perf-r7-142> load unison/scratch/warp--perf-r7-142.u
+@dfreeman/warp/perf-r7-142> update
+@dfreeman/warp/perf-r7-142> run tests.builtins.textFuzz.suite
+@dfreeman/proscenium/perf-r7-142> fork @dfreeman/warp/perf-r7-142: lib.dfreeman_warp_r7_142t
+@dfreeman/proscenium/perf-r7-142> upgrade dfreeman_warp_r7_142 dfreeman_warp_r7_142t
+```
+
 - [ ] The same app for stock Proscenium (`bench.jfbstock`, plain `useState` and a region
       per row), on a branch of `bench`:
 
@@ -353,3 +379,6 @@ Suggested `history.comment` lines:
 - proscenium/perf-r7: `perf-r5m on warp perf-r7; bench.jfb, the js-framework-benchmark app`
 - proscenium/bench-jfb: `bench.jfbstock, the js-framework-benchmark app for stock Proscenium`
 - proscenium/perf-r7-mini: `bench.mini, a keyed virtual DOM in plain Unison with memo nodes and prefix/suffix trimming; the rows app as data and through a one-handler Html ability`
+- warp/offer-3-text: `Text by code point, as Unison counts and orders it: size, take, drop, uncons, unsnoc, reverse, toCharList, indexOf and pattern steps; CompareStrings as a code point loop, fixing text matches; tests.builtins.textFuzz`
+- warp/perf-r7-142: `Text by code point, as on offer-3-text, with the wasm Text builtins of round 7 rewritten as code point loops`
+- proscenium/perf-r7-142: `on warp perf-r7-142 with Text by code point`

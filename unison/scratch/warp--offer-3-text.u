@@ -1,0 +1,770 @@
+{{ A small linear congruential generator, so the native and Wasm sides draw the same operations. }}
+tests.builtins.textFuzz.lcg : Nat -> Nat
+tests.builtins.textFuzz.lcg s = Nat.mod ((s Nat.* 1103515245) Nat.+ 12345) 2147483648
+
+tests.builtins.textFuzz.cat : [Text] -> Text
+tests.builtins.textFuzz.cat = Text.join ""
+
+tests.builtins.textFuzz.cmp : a -> a -> Text
+tests.builtins.textFuzz.cmp x y = match Universal.compare x y with
+  +0 -> "EQ"
+  i | i Int.< +0 -> "LT"
+  _ -> "GT"
+
+tests.builtins.textFuzz.boolText : Boolean -> Text
+tests.builtins.textFuzz.boolText b = if b then "T" else "F"
+
+tests.builtins.textFuzz.optNat : Optional Nat -> Text
+tests.builtins.textFuzz.optNat = cases
+  Some n -> Nat.toText n
+  None -> "none"
+
+{{ The first line where two traces differ, with both versions of it (`<end>` where one trace is shorter). }}
+tests.builtins.textFuzz.firstDiff : [Text] -> [Text] -> Optional (Nat, Text, Text)
+tests.builtins.textFuzz.firstDiff xs ys =
+  use Nat +
+  go i = match (List.at i xs, List.at i ys) with
+    (None, None) -> None
+    (Some x, Some y) | x Text.== y -> go (i + 1)
+    (x, y) -> Some (i, Optional.getOrElse "<end>" x, Optional.getOrElse "<end>" y)
+  go 0
+
+{{ A text by its UTF-8 bytes: how many, a hash of all of them, and the first six in hex. A line then says which code points a text holds, and a lone surrogate (which UTF-8 cannot hold) shows up as the replacement character's bytes. }}
+tests.builtins.textFuzz.bytesOf : Text -> Text
+tests.builtins.textFuzz.bytesOf t =
+  bytes = unison_base_7_15_0.Bytes.toList (Text.toUtf8 t)
+  hex b = Nat.toTextBase 16 b |> Optional.getOrElse "?"
+  hash = List.foldLeft (acc b -> Nat.mod ((acc Nat.* 31) Nat.+ b) 1000000007) 7 bytes
+  tests.builtins.textFuzz.cat ["u8#", Nat.toText (List.size bytes), "h", Nat.toText hash, "[", Text.join " " (List.map hex (List.take 6 bytes)), "]"]
+
+{{ A list of code points, as numbers. }}
+tests.builtins.textFuzz.codes : [Char] -> Text
+tests.builtins.textFuzz.codes chars = "[" Text.++ Text.join "," (List.map (c -> Nat.toText (Char.toNat c)) chars) Text.++ "]"
+
+{{ Texts the fuzz draws from: ASCII, two- and three-byte UTF-8, characters outside the Basic Multilingual Plane (written in JS as two UTF-16 units), a combining mark, a skin-tone modifier, and U+FF61, which sorts above every surrogate in UTF-16 but below the astral characters by code point. }}
+tests.builtins.textFuzz.seeds : [Text]
+tests.builtins.textFuzz.seeds =
+  [ ""
+  , "abc"
+  , "héllo wörld"
+  , "日本語のテキスト"
+  , "a😀b"
+  , "👍🏽 ok"
+  , "é"
+  , "｡x"
+  , "𝔘𝔫𝔦𝔠𝔬𝔡𝔢 text"
+  , "😀😀😀"
+  ]
+
+{{ A `match` on text literals, which warp compiles to a binary search over the literals sorted by Unison's order. The literals mix ASCII, U+FF61 and characters outside the Basic Multilingual Plane, whose order differs between code points and UTF-16 units. }}
+tests.builtins.textFuzz.arm : Text -> Nat
+tests.builtins.textFuzz.arm = cases
+  "a" -> 1
+  "｡" -> 2
+  "😀" -> 3
+  "é" -> 4
+  "𝔘" -> 5
+  "｡x" -> 6
+  "a😀b" -> 7
+  "👍" -> 8
+  _ -> 0
+
+{{ Code points the fuzz appends: ASCII, Latin-1, a CJK character, U+FF61, and three outside the Basic Multilingual Plane. }}
+tests.builtins.textFuzz.points : [Nat]
+tests.builtins.textFuzz.points = [65, 233, 26085, 65377, 128512, 119828, 127997]
+
+{{ One text operation, picked by `op`: sizes, slices (`take`, `drop`, `uncons`, `unsnoc`), `reverse`, char lists both ways, `++`, `indexOf`, `compare` and `==`, `repeat`, `split`, case changes, UTF-8 round trips, appending a code point, a pattern capturing two characters, and a `match` on text literals ({tests.builtins.textFuzz.arm}). Each step returns the text that replaces `a` in the pool and a line describing the result. }}
+tests.builtins.textFuzz.step : Nat -> Text -> Text -> Nat ->{Exception} (Text, Text)
+tests.builtins.textFuzz.step op a b r =
+  use Nat + mod toText
+  use Text ++
+  use tests.builtins.textFuzz cat cmp boolText optNat
+  bytesOf = tests.builtins.textFuzz.bytesOf
+  codes = tests.builtins.textFuzz.codes
+  na = Text.size a
+  match op with
+    0 -> (a, cat ["size ", toText na, " ", toText (Text.size b)])
+    1 ->
+      n = mod r (na + 3)
+      (Text.take n a, cat ["take ", toText n])
+    2 ->
+      n = mod r (na + 3)
+      (Text.drop n a, cat ["drop ", toText n])
+    3 -> match Text.uncons a with
+      Some (c, rest) -> (rest, cat ["uncons ", toText (Char.toNat c)])
+      None -> (a, "uncons none")
+    4 -> match Text.unsnoc a with
+      Some (rest, c) -> (rest, cat ["unsnoc ", toText (Char.toNat c)])
+      None -> (a, "unsnoc none")
+    5 -> (Text.reverse a, "reverse")
+    6 -> (a, cat ["chars ", codes (Text.toCharList a)])
+    7 -> (Text.fromCharList (List.reverse (Text.toCharList a)), "fromCharList reversed")
+    8 -> (a ++ b, "append")
+    9 ->
+      i = mod r (na + 1)
+      j = mod (r / 7) 4
+      needle = Text.take j (Text.drop i a)
+      (a, cat ["indexOf ", bytesOf needle, " ", optNat (Text.indexOf needle a)])
+    10 -> (a, cat ["cmp ", cmp a b, " eq ", boolText (a Text.== b), " lt ", boolText (a Text.< b)])
+    11 ->
+      k = mod r 4
+      (Text.repeat k a, cat ["repeat ", toText k])
+    12 ->
+      parts = Text.split ?\s a
+      (Text.join "_" parts, cat ["split ", toText (List.size parts)])
+    13 -> (Text.toUppercase a, "upper")
+    14 -> (Text.toLowercase a, "lower")
+    15 -> match Text.fromUtf8.impl (Text.toUtf8 a) with
+      Right t -> (t, cat ["utf8 ", boolText (t Text.== a)])
+      Left _ -> (a, "utf8 failed")
+    16 ->
+      code = List.at (mod r (List.size tests.builtins.textFuzz.points)) tests.builtins.textFuzz.points |> Optional.getOrElse 65
+      match Char.fromNat code with
+        Some c -> (a ++ Char.toText c, cat ["snoc ", toText code])
+        None -> (a, cat ["snoc invalid ", toText code])
+    17 ->
+      two = Pattern.capture (Pattern.replicate 2 2 Text.patterns.anyChar)
+      match Pattern.run two a with
+        Some (captured, rest) -> (rest, cat ["pattern ", bytesOf (Text.join "|" captured)])
+        None -> (a, "pattern none")
+    18 ->
+      i = mod r (na + 2)
+      (a, cat ["at ", toText i, " ", bytesOf (Text.take 1 (Text.drop i a))])
+    19 -> (a, cat ["arm ", toText (tests.builtins.textFuzz.arm (Text.take 1 a)), " ", toText (tests.builtins.textFuzz.arm a)])
+    _ ->
+      seed = List.at (mod r (List.size tests.builtins.textFuzz.seeds)) tests.builtins.textFuzz.seeds |> Optional.getOrElse ""
+      (seed, "seed")
+
+{{ Applies `steps` pseudo-random text operations ({tests.builtins.textFuzz.step}) to a pool of eight texts, starting from `seed`, and describes each result by its UTF-8 bytes. Texts longer than 60 characters are cut back so a trace stays small. }}
+tests.builtins.textFuzz.trace : Nat -> Nat ->{Exception} [Text]
+tests.builtins.textFuzz.trace seed steps =
+  use Nat + mod toText ==
+  use List :+
+  use tests.builtins.textFuzz cat lcg
+  go i s pool out =
+    if i == steps then out
+    else
+      s1 = lcg s
+      s2 = lcg s1
+      s3 = lcg s2
+      s4 = lcg s3
+      op = mod (s1 / 7) 21
+      ai = mod (s2 / 3) 8
+      bi = mod (s3 / 5) 8
+      a = List.at ai pool |> Optional.getOrElse ""
+      b = List.at bi pool |> Optional.getOrElse ""
+      (res, line) = tests.builtins.textFuzz.step op a b (s4 / 11)
+      res' = if Text.size res Nat.> 60 then Text.take 60 res else res
+      pool' = List.replace ai res' pool
+      go (i + 1) s4 pool' (out :+ cat [toText i, " op", toText op, " ", line, " => ", tests.builtins.textFuzz.bytesOf res'])
+  go 0 seed (List.take 8 tests.builtins.textFuzz.seeds) []
+
+{{
+Runs the same {tests.builtins.textFuzz.trace} natively and in Wasm. Unison's `Text` counts code points, so this catches any builtin that works in UTF-16 units instead.
+
+The Wasm side sends its trace over the test channel. The native side compares it with its own, prints the first line where they differ, and sends that line back. The Wasm side then fails if it got one. A failure is raised in Wasm because the harness reports one there, while a failure on the native side of a channel test leaves the harness waiting.
+}}
+tests.builtins.textFuzz : Nat -> Nat -> WasmTest
+tests.builtins.textFuzz seed steps =
+  use tests.builtins.textFuzz cat
+  host = do
+    lines = tests.builtins.textFuzz.trace seed steps
+    other = receiveValue()
+    verdict = match tests.builtins.textFuzz.firstDiff lines (Text.split ?\n other) with
+      None -> ""
+      Some (i, native, wasm) -> cat ["line ", Nat.toText i, "\n  native: ", native, "\n  wasm:   ", wasm]
+    if verdict Text.== "" then () else printLine (cat ["text fuzz ", Nat.toText seed, " differs at ", verdict])
+    sendValue verdict
+  wasm = do
+    sendValue (Text.join "\n" (tests.builtins.textFuzz.trace seed steps))
+    test.ensureEqual "" (receiveValue())
+  wasmTestWithChannel (cat ["text fuzz ", Nat.toText seed]) host wasm
+
+{{ {tests.builtins.textFuzz} from three seeds, 600 operations each. }}
+tests.builtins.textFuzz.suite : '{IO, Exception} [Result]
+tests.builtins.textFuzz.suite = do WasmTest.run [tests.builtins.textFuzz 42 600, tests.builtins.textFuzz 7 600, tests.builtins.textFuzz 1234 600]
+
+{{ A short {tests.builtins.textFuzz}, for a first look. }}
+tests.builtins.textFuzz.short : '{IO, Exception} [Result]
+tests.builtins.textFuzz.short = do WasmTest.run [tests.builtins.textFuzz 42 40]
+
+{{ `Text.size` for warp's output: the number of code points, as Unison counts them, rather than the string's UTF-16 `length`. A pair of surrogates counts once. }}
+internal.runtime.replacements.unison_base.Text_size : Replacement
+internal.runtime.replacements.unison_base.Text_size =
+  src =
+    """
+    (rt, text) => {
+      let s = rt.Text_getValue(text), n = s.length;
+      for (let i = 0; i + 1 < s.length; i++) {
+        if ((s.charCodeAt(i) & 0xFC00) === 0xD800 && (s.charCodeAt(i + 1) & 0xFC00) === 0xDC00) { n--; i++; }
+      }
+      return rt.Nat(BigInt(n));
+    }
+    """
+  jsFunction 1 src
+
+{{ `Text.take` for warp's output: the first `n` code points, so a character outside the Basic Multilingual Plane is never split into half a surrogate pair. }}
+internal.runtime.replacements.unison_base.Text_take : Replacement
+internal.runtime.replacements.unison_base.Text_take =
+  src =
+    """
+    (rt, n, text) => {
+      let s = rt.Text_getValue(text), k = rt.Nat_getValue(n), i = 0;
+      if (k >= BigInt(s.length)) return text;
+      for (k = Number(k); k > 0 && i < s.length; k--) {
+        i += ((s.charCodeAt(i) & 0xFC00) === 0xD800 && (s.charCodeAt(i + 1) & 0xFC00) === 0xDC00) ? 2 : 1;
+      }
+      return rt.Text(s.slice(0, i));
+    }
+    """
+  jsFunction 2 src
+
+{{ `Text.drop` for warp's output: all but the first `n` code points. }}
+internal.runtime.replacements.unison_base.Text_drop : Replacement
+internal.runtime.replacements.unison_base.Text_drop =
+  src =
+    """
+    (rt, n, text) => {
+      let s = rt.Text_getValue(text), k = rt.Nat_getValue(n), i = 0;
+      if (k >= BigInt(s.length)) return rt.Text('');
+      for (k = Number(k); k > 0 && i < s.length; k--) {
+        i += ((s.charCodeAt(i) & 0xFC00) === 0xD800 && (s.charCodeAt(i + 1) & 0xFC00) === 0xDC00) ? 2 : 1;
+      }
+      return rt.Text(s.slice(i));
+    }
+    """
+  jsFunction 2 src
+
+{{ `Text.uncons` for warp's output: the first code point and the rest. }}
+internal.runtime.replacements.unison_base.Text_uncons : Replacement
+internal.runtime.replacements.unison_base.Text_uncons =
+  src =
+    """
+    (rt, text) => {
+      let s = rt.Text_getValue(text);
+      if (s.length === 0) return rt.Optional_None();
+      let w = s.codePointAt(0) > 0xFFFF ? 2 : 1;
+      return rt.Optional_Some(rt.Tuple_Cons(rt.Char(s.slice(0, w)), rt.Tuple_Cons(rt.Text(s.slice(w)), rt.Unit())));
+    }
+    """
+  jsFunction 1 src
+
+{{ `Text.unsnoc` for warp's output: all but the last code point, and the last. }}
+internal.runtime.replacements.unison_base.Text_unsnoc : Replacement
+internal.runtime.replacements.unison_base.Text_unsnoc =
+  src =
+    """
+    (rt, text) => {
+      let s = rt.Text_getValue(text), n = s.length;
+      if (n === 0) return rt.Optional_None();
+      let w = (n >= 2 && (s.charCodeAt(n - 1) & 0xFC00) === 0xDC00 && (s.charCodeAt(n - 2) & 0xFC00) === 0xD800) ? 2 : 1;
+      return rt.Optional_Some(rt.Tuple_Cons(rt.Text(s.slice(0, n - w)), rt.Tuple_Cons(rt.Char(s.slice(n - w)), rt.Unit())));
+    }
+    """
+  jsFunction 1 src
+
+{{ `Text.reverse` for warp's output: the code points in reverse order, each kept whole. }}
+internal.runtime.replacements.unison_base.Text_reverse : Replacement
+internal.runtime.replacements.unison_base.Text_reverse =
+  src = "(rt, text) => rt.Text(Array.from(rt.Text_getValue(text)).reverse().join(''))"
+  jsFunction 1 src
+
+{{ `Text.toCharList` for warp's output: one `Char` per code point. }}
+internal.runtime.replacements.unison_base.Text_toCharList : Replacement
+internal.runtime.replacements.unison_base.Text_toCharList =
+  src =
+    """
+    (rt, text) => {
+      let chars = Array.from(rt.Text_getValue(text), c => rt.Char(c));
+      return rt.List(rt.js.Sequence.fromArray(rt.js.Sequence.LIST_ARITY, chars));
+    }
+    """
+  jsFunction 1 src
+
+{{ `Text.indexOf` for warp's output: where `needle` first occurs in `haystack`, counted in code points. }}
+internal.runtime.replacements.unison_base.Text_indexOf : Replacement
+internal.runtime.replacements.unison_base.Text_indexOf =
+  src =
+    """
+    (rt, needle, haystack) => {
+      let s = rt.Text_getValue(haystack), index = s.indexOf(rt.Text_getValue(needle));
+      if (index === -1) return rt.Optional_None();
+      let n = index;
+      for (let i = 0; i + 1 < index; i++) {
+        if ((s.charCodeAt(i) & 0xFC00) === 0xD800 && (s.charCodeAt(i + 1) & 0xFC00) === 0xDC00) { n--; i++; }
+      }
+      return rt.Optional_Some(rt.Nat(BigInt(n)));
+    }
+    """
+  jsFunction 2 src
+
+{{ warp's JS pattern engine. A character class matches one code point, so it consumes both units of a surrogate pair, and a lookbehind looks at the whole code point before the position. Positions stay UTF-16 offsets inside the engine; captures and the rest are slices at code point boundaries. }}
+internal.javascript.supportJS.patternJS : Text
+internal.javascript.supportJS.patternJS =
+  """
+  class Pattern {
+    constructor(matcher) {
+      this.run = matcher;
+    }
+
+    static width(text, index) {
+      return index + 1 < text.length && (text.charCodeAt(index) & 0xFC00) === 0xD800 && (text.charCodeAt(index + 1) & 0xFC00) === 0xDC00 ? 2 : 1;
+    }
+
+    static before(text, index) {
+      return index >= 2 && (text.charCodeAt(index - 1) & 0xFC00) === 0xDC00 && (text.charCodeAt(index - 2) & 0xFC00) === 0xD800 ? text.slice(index - 2, index) : text.slice(index - 1, index);
+    }
+
+    static charClass(regex) {
+      return new Pattern((text, index) => {
+        if (index >= text.length) return null;
+        let char = text.slice(index, index + Pattern.width(text, index));
+        let result = regex.exec(char);
+        if (result) {
+          return { captures: [], index: index + char.length };
+        } else {
+          return null;
+        }
+      });
+    }
+
+    static literal(text) {
+      return new Pattern((input, index) => {
+        if (input.slice(index).startsWith(text)) {
+          return { captures: [], index: index + text.length };
+        } else {
+          return null;
+        }
+      });
+    }
+
+    static join(patterns) {
+      return new Pattern((text, index) => {
+        let captures = [];
+        for (let pattern of patterns) {
+          let result = pattern.run(text, index);
+          if (result === null) return null;
+          captures.push(...result.captures);
+          index = result.index;
+        }
+        return { captures, index };
+      });
+    }
+
+    static capture(pattern) {
+      return new Pattern((text, index) => {
+        let result = pattern.run(text, index);
+        if (result === null) return null;
+        let captures = [text.slice(index, result.index), ...result.captures];
+        return { captures, index: result.index };
+      });
+    }
+
+    static captureAs(as, pattern) {
+      return new Pattern((text, index) => {
+        let result = pattern.run(text, index);
+        if (result === null) return null;
+        let captures = [as, ...result.captures];
+        return { captures, index: result.index };
+      });
+    }
+
+    static lookahead(pattern) {
+      return new Pattern((text, index) => {
+        let result = pattern.run(text, index);
+        if (result === null) return null;
+        return { captures: [], index };
+      });
+    }
+
+    static negativeLookahead(pattern) {
+      return new Pattern((text, index) => {
+        let result = pattern.run(text, index);
+        if (result !== null) return null;
+        return { captures: [], index };
+      });
+    }
+
+    static lookbehind(regex) {
+      return new Pattern((text, index) => {
+        if (regex.test(Pattern.before(text, index))) {
+          return { captures: [], index };
+        } else {
+          return null;
+        }
+      });
+    }
+
+    static negativeLookbehind(regex) {
+      return new Pattern((text, index) => {
+        if (!regex.test(Pattern.before(text, index))) {
+          return { captures: [], index };
+        } else {
+          return null;
+        }
+      });
+    }
+
+    static many(pattern) {
+      return new Pattern((text, index) => {
+        let captures = [];
+        while (true) {
+          let result = pattern.run(text, index);
+          if (result === null) break;
+          captures.push(...result.captures);
+          index = result.index;
+        }
+        return { captures, index };
+      });
+    }
+
+    static replicate(n, m, pattern) {
+      return new Pattern((text, index) => {
+        let captures = [];
+        let count = 0;
+        while (count < m) {
+          let result = pattern.run(text, index);
+          if (result === null) break;
+          captures.push(...result.captures);
+          index = result.index;
+          count++;
+        }
+        if (count < n) return null;
+        return { captures, index };
+      });
+    }
+
+    static or(a, b) {
+      return new Pattern((text, index) => {
+        let resultA = a.run(text, index);
+        if (resultA !== null) return resultA;
+        return b.run(text, index);
+      });
+    }
+
+    static eof() {
+      return new Pattern((text, index) => {
+        if (index >= text.length) {
+          return { captures: [], index };
+        } else {
+          return null;
+        }
+      });
+    }
+  }
+  """
+
+{{ `Universal.compare` for warp's output: warp 1.4.2's, with `Text` and `Char` ordered by code point, as Unison orders them, rather than by UTF-16 unit. }}
+internal.runtime.replacements.unison_base.Universal_compare : Replacement
+internal.runtime.replacements.unison_base.Universal_compare =
+  src =
+    """
+    (() => {
+      function compareJSPrimitives(a, b) {
+        return a < b ? -1 : a > b ? 1 : 0;
+      }
+      // Unison orders Text and Char by code point. JS's < orders by UTF-16 unit, which puts a
+      // character outside the Basic Multilingual Plane (a surrogate pair, from 0xD800) below
+      // U+E000 to U+FFFF. Moving the surrogates above that range at the first difference gives
+      // code point order.
+      function compareCodePoints(a, b) {
+        for (let i = 0, len = Math.min(a.length, b.length); i < len; i++) {
+          let x = a.charCodeAt(i), y = b.charCodeAt(i);
+          if (x !== y) {
+            if (x >= 0xD800) x = x < 0xE000 ? x + 0x2000 : x - 0x800;
+            if (y >= 0xD800) y = y < 0xE000 ? y + 0x2000 : y - 0x800;
+            return x < y ? -1 : 1;
+          }
+        }
+        return a.length < b.length ? -1 : a.length > b.length ? 1 : 0;
+      }
+      function compareArgs(rt, as, bs) {
+        for (let i = 0, len = rt.Args_length(as); i < len; i++) {
+          let a = rt.Args_at(as, i);
+          let b = rt.Args_at(bs, i);
+          if (a == null) return -1;
+          if (b == null) return 1;
+          let cmp = compare(rt, a, b);
+          if (cmp !== 0) return cmp;
+        }
+        return 0;
+      }
+      // This is likely inconsistent with how the real runtime orders differently-typed things, which could result in problems if e.g. a `Map` with `Any` keys produced in one runtime is serialised to the other. Not going to worry about that for demo purposes, though.
+      function compare(rt, a, b) {
+        if (a === b) return 0;
+        if (!rt.Value_detect(a) || !rt.Value_detect(b)) rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Attempted to compare non-value'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+        let aTag = rt.Value_getTag(a);
+        let bTag = rt.Value_getTag(b);
+        if (!rt.js.valueTagsCompatible(rt, aTag, bTag)) return compareJSPrimitives(aTag, bTag);
+        switch (aTag) {
+          case rt.Nat_TAG.value:
+          case rt.Int_TAG.value: {
+            let aRaw = rt.Nat_getValue(a);
+            let bRaw = rt.Nat_getValue(b);
+            let aVal = aTag === rt.Nat_TAG.value ? BigInt.asUintN(64, aRaw) : BigInt.asIntN(64, aRaw);
+            let bVal = bTag === rt.Nat_TAG.value ? BigInt.asUintN(64, bRaw) : BigInt.asIntN(64, bRaw);
+            return compareJSPrimitives(aVal, bVal);
+          }
+          case rt.Float_TAG.value:
+            return compareJSPrimitives(rt.Float_getValue(a), rt.Float_getValue(b));
+          case rt.TypeLink_TAG.value:
+            return rt.compareIds(rt.TypeLink_getId(a), rt.TypeLink_getId(b));
+          case rt.TermLink_TAG.value: {
+            let idComparison = rt.compareIds(rt.TermLink_getId(a), rt.TermLink_getId(b));
+            if (idComparison !== 0) return idComparison;
+            return compareJSPrimitives(rt.TermLink_getConstructor(a), rt.TermLink_getConstructor(b));
+          }
+          case rt.Char_TAG.value:
+            return compareCodePoints(rt.Char_getValue(a), rt.Char_getValue(b));
+          case rt.Text_TAG.value:
+            return compareCodePoints(rt.Text_getValue(a), rt.Text_getValue(b));
+          case rt.Data_TAG.value: {
+            let typeComparison = rt.compareIds(rt.Data_getType(a), rt.Data_getType(b));
+            if (typeComparison !== 0) return typeComparison;
+            let constructorComparison = compareJSPrimitives(rt.Data_getConstructor(a), rt.Data_getConstructor(b));
+            if (constructorComparison !== 0) return constructorComparison;
+            return compareArgs(rt, rt.Data_getArgs(a), rt.Data_getArgs(b));
+          }
+          case rt.Request_TAG.value: {
+            let dataComparison = compare(rt, rt.Request_getData(a), rt.Request_getData(b));
+            if (dataComparison !== 0) return dataComparison;
+            return compare(rt, rt.Request_getContinue(a), rt.Request_getContinue(b));
+          }
+          case rt.Function_TAG.value:
+          case rt.Closure_TAG.value: {
+            let idComparison = rt.compareIds(rt.Function_getId(a), rt.Function_getId(b));
+            if (idComparison !== 0) return idComparison;
+            let aBound = aTag === rt.Closure_TAG.value ? rt.Closure_getBound(a) : null;
+            let bBound = bTag === rt.Closure_TAG.value ? rt.Closure_getBound(b) : null;
+            if (aBound === null && bBound == null) return 0;
+            if (aBound === null) return -1;
+            if (bBound === null) return 1;
+            return compareArgs(rt, aBound, bBound);
+          }
+          case rt.Continuation_TAG.value:
+            let dataComparison = compareArgs(rt, rt.Continuation_getData(a), rt.Continuation_getData(b));
+            if (dataComparison !== 0) return dataComparison;
+            if (rt.Continuation_getImpl(a) === rt.Continuation_getImpl(b)) return 0;
+            rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unable to compare different continuations with the same carried data'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+          case rt.Quote_TAG.value:
+            return compare(rt, rt.Quote_getValue(a), rt.Quote_getValue(b));
+          case rt.Code_TAG.value:
+            return compare(rt, rt.Code_getValue(a), rt.Code_getValue(b));
+          case rt.Foreign_TAG.value: {
+            let valueA = rt.Foreign_getValue(a);
+            let valueB = rt.Foreign_getValue(b);
+            if (valueA === valueB) return 0;
+            if (typeof valueA === 'bigint' && typeof valueB === 'bigint') {
+              return compareJSPrimitives(valueA, valueB);
+            }
+            if (valueA instanceof rt.js.JSValue && valueB instanceof rt.js.JSValue) {
+              valueA = valueA.get();
+              valueB = valueB.get();
+              if (valueA === valueB) return 0;
+              if (typeof valueA === typeof valueB) {
+                switch (typeof valueA) {
+                  case 'number':
+                  case 'string':
+                  case 'boolean':
+                  case 'bigint':
+                  case 'undefined':
+                    return compareJSPrimitives(valueA, valueB);
+                  default:
+                    // fallthrough
+                }
+              }
+            }
+            rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unable to compare different foreign values'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+          }
+          case rt.Boolean_TAG.value:
+            return compareJSPrimitives(rt.Boolean_getValue(a), rt.Boolean_getValue(b));
+          case rt.Array_TAG.value:
+            return compareArgs(rt.Array_getContents(a), rt.Array_getContents(b));
+          case rt.ByteArray_TAG.value: {
+            let aView = rt.ByteArray_getContents(a);
+            let bView = rt.ByteArray_getContents(b);
+            let aBytes = new Uint8Array(aView.buffer, aView.byteOffset, aView.byteLength);
+            let bBytes = new Uint8Array(bView.buffer, bView.byteOffset, bView.byteLength);
+            for (let i = 0, len = Math.max(aBytes.byteLength, bBytes.byteLength); i < len; i++) {
+              let aByte = aBytes[i];
+              let bByte = bBytes[i];
+              if (aByte == null) return -1;
+              if (bByte == null) return 1;
+              if (aByte !== bByte) return aByte < bByte ? -1 : 1;
+            }
+            return 0;
+          }
+          case rt.Bytes_TAG.value: {
+            let aBytes = rt.Bytes_getValue(a).toUint8Array();
+            let bBytes = rt.Bytes_getValue(b).toUint8Array();
+            for (let i = 0, len = Math.max(aBytes.byteLength, bBytes.byteLength); i < len; i++) {
+              let aByte = aBytes[i];
+              let bByte = bBytes[i];
+              if (aByte == null) return -1;
+              if (bByte == null) return 1;
+              if (aByte !== bByte) return aByte < bByte ? -1 : 1;
+            }
+            return 0;
+          }
+          case rt.List_TAG.value: {
+            let aList = rt.List_getValue(a);
+            let bList = rt.List_getValue(b);
+            for (let i = 0, len = Math.max(aList.size, bList.size); i < len; i++) {
+              let aEl = aList.at(i);
+              let bEl = bList.at(i);
+              if (aEl == null) return -1;
+              if (bEl == null) return 1;
+              let cmp = compare(rt, aEl, bEl);
+              if (cmp !== 0) return cmp;
+            }
+            return 0;
+          }
+          default:
+            rt.js.panic(rt, "builtin.bug", rt.Tuple_Cons(rt.Text('Unknown value type for comparison'), rt.Tuple_Cons(rt.Foreign([a, b]), rt.Unit())));
+        }
+      }
+      return (rt, a, b) => rt.Int(BigInt(compare(rt, a, b)));
+    })()
+
+    """
+  jsFunction 2 src
+
+{{
+`Text.<`, `Text.>`, `Text.<=` and `Text.>=` for warp's output, in wasm: {internal.runtime.Helper.CompareStrings}, which orders by code point as Unison does, rather than the `wasm:js-string` `compare` builtin, which orders by UTF-16 unit.
+
+`textOrder test` builds one of them: `test` turns the order (`-1`, `0` or `1`, on the stack) into the Boolean.
+}}
+internal.runtime.replacements.unison_base.Text_lt.textOrder : '{ExprCtx} () -> Replacement
+internal.runtime.replacements.unison_base.Text_lt.textOrder test = wasmExpression 2 cases
+  runtime -> cases
+    env, vars ->
+      pushTag VBoolean
+      env' = List.foldLeft (pushUnboxedVar VText) env vars
+      instr.call (Runtime.helper CompareStrings runtime)
+      test()
+      struct.new (Runtime.valueType VBoolean runtime)
+      env'
+
+{{
+warp's string comparison, used by text `match`es (which binary-search their literals, sorted by Unison's order when the module is built), by `Universal.compare` and by `Text.<` and its siblings. It orders by code point, as Unison does. The `wasm:js-string` `compare` builtin it replaces orders by UTF-16 unit, which puts a character outside the Basic Multilingual Plane (a surrogate pair, from 0xD800) below U+E000 to U+FFFF. A `match` then missed an arm whose literal was outside the plane when another arm's literal was in that range.
+
+The two strings are walked with `charCodeAt` to their first difference, where surrogates are moved above U+E000 to U+FFFF. A string that is a prefix of the other comes first.
+}}
+internal.runtime.Helper.CompareStrings.define : Types ->{TypeCtx, ModuleCtx} FuncReference
+internal.runtime.Helper.CompareStrings.define types =
+  use func *
+  use local get named set
+  length = import.func "wasm:js-string" "length" (param externref => result i32)
+  charCodeAt = import.func "wasm:js-string" "charCodeAt" (param externref * param i32 => result i32)
+  compareStrings = def.func (CompareStrings.signature types) cases
+    (a, b) ->
+      x = named "x" i32
+      y = named "y" i32
+      common = named "common" i32
+      index = named "index" i32
+      order = named "order" i32
+      sign _ =
+        get x
+        get y
+        i32.gtS()
+        get x
+        get y
+        i32.ltS()
+        i32.sub()
+        set order
+      codePointOrder unit =
+        get unit
+        i32.const 8192
+        i32.add()
+        get unit
+        i32.const 2048
+        i32.sub()
+        get unit
+        i32.const 57344
+        i32.ltS()
+        select.numeric()
+        get unit
+        get unit
+        i32.const 55296
+        i32.geS()
+        select.numeric()
+        set unit
+      get a
+      instr.call length
+      set x
+      get b
+      instr.call length
+      set y
+      sign()
+      get x
+      get y
+      get x
+      get y
+      i32.ltS()
+      select.numeric()
+      set common
+      i32.const 0
+      set index
+      block cases
+        exit ->
+          instr.loop cases
+            again ->
+              get index
+              get common
+              i32.geS()
+              brIf exit
+              block cases
+                same ->
+                  get a
+                  get index
+                  instr.call charCodeAt
+                  set x
+                  get b
+                  get index
+                  instr.call charCodeAt
+                  set y
+                  get x
+                  get y
+                  i32.eq()
+                  brIf same
+                  codePointOrder x
+                  codePointOrder y
+                  sign()
+                  br exit
+              get index
+              i32.const 1
+              i32.add()
+              set index
+              br again
+      get order
+  export.func "compareStrings" compareStrings
+  compareStrings
+
+internal.runtime.replacements.unison_base.Text_lt : Replacement
+internal.runtime.replacements.unison_base.Text_lt = Text_lt.textOrder do
+  i32.const (Int.toRepresentation -1)
+  i32.eq()
+
+internal.runtime.replacements.unison_base.Text_gt : Replacement
+internal.runtime.replacements.unison_base.Text_gt = Text_lt.textOrder do
+  i32.const 1
+  i32.eq()
+
+internal.runtime.replacements.unison_base.Text_lte : Replacement
+internal.runtime.replacements.unison_base.Text_lte = Text_lt.textOrder do
+  i32.const 1
+  i32.ltS()
+
+internal.runtime.replacements.unison_base.Text_gte : Replacement
+internal.runtime.replacements.unison_base.Text_gte = Text_lt.textOrder do
+  i32.const (Int.toRepresentation -1)
+  i32.gtS()
+
+ReleaseNotes : Doc
+ReleaseNotes =
+  {{
+  * Further hardened {Universal.compare} against edge cases in bare function and closure comparison.
+  * `Text` counts code points, as Unison does, rather than UTF-16 units. `Text.size`, `Text.take`, `Text.drop`, `Text.uncons`, `Text.unsnoc`, `Text.reverse`, `Text.toCharList` and `Text.indexOf` treat a character outside the Basic Multilingual Plane, such as an emoji, as one character, and never split it into half a surrogate pair. A text pattern's character class matches one code point.
+  * `Text` and `Char` are ordered by code point, as Unison orders them, in {Universal.compare}, in `Text.<` and its siblings, and in a `match` on text literals. That `match` binary-searches literals sorted by Unison's order, and could miss an arm whose literal was outside the Basic Multilingual Plane.
+  * `tests.builtins.textFuzz` runs 1,800 pseudo-random text operations natively and in Wasm and fails on the first difference.
+  }}
