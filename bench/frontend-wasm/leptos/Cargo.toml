@@ -3,7 +3,7 @@
 # codegen unit.
 [workspace]
 resolver = "2"
-members = ["counter", "rows", "cards"]
+members = ["counter", "rows", "cards", "meals"]
 
 [workspace.dependencies]
 leptos = { version = "0.8", features = ["csr"] }

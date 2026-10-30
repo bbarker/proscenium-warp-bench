@@ -150,6 +150,16 @@ scratch/main> clone @dfreeman/warp/releases/1.3.0 @dfreeman/warp/perf-r4
       (The lib names in the `upgrade` lines are whatever `ls lib` shows for warp and
       ink on that branch.) Four tests should pass.
 
+- [ ] The meals page (the realistic benchmark added after round 5), on `perf-r5i`. It
+      adds only `bench.meals`, so `add` is enough:
+
+```ucm
+@dfreeman/proscenium/perf-r5i> branch /perf-r5m
+@dfreeman/proscenium/perf-r5m> load unison/scratch/proscenium--perf-r5m.u
+@dfreeman/proscenium/perf-r5m> add
+@dfreeman/proscenium/perf-r5m> compile bench.meals.build target/unison/frontend-bench/meals-build-r5i
+```
+
 Suggested `history.comment` lines:
 
 - ink/perf: `keyed reconcile in O(n log n) by longest increasing run, new children move with a moved predecessor; compute_ lets a message re-run only the computation owning its cell`
@@ -161,3 +171,4 @@ Suggested `history.comment` lines:
 - warp/perf-r4: `List as a balanced tree of 32-element arrays in wasm; direct typed JSValue calls; a differential List fuzz test against the native runtime`
 - proscenium/perf-r5: `DOM sync builds new subtrees bottom-up, by identity of the keys ink places children under, and batches removals under one parent`
 - warp/perf-r5: `List.:+ appends in place into a leaf's spare capacity, marked by a hole value`
+- proscenium/perf-r5m: `bench.meals: a meal planner page (week of day cards with totals, grocery list, recipe search, FLIP-animated day move, CSS-animated SVG mascot) and its timed build entry`

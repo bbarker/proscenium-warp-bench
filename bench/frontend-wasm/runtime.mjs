@@ -4,8 +4,9 @@
 //
 //   node bench/frontend-wasm/runtime.mjs <suite> [iterations]
 //
-// <suite> is `rows` (js-framework-benchmark operations), `cards-<count>` or
-// `counter`. Each iteration opens a fresh browser context, loads the page,
+// <suite> is `rows` (js-framework-benchmark operations), `meals` (a meal
+// planner's week, grocery list and recipe search; see the report), `cards-<count>`
+// or `counter`. Each iteration opens a fresh browser context, loads the page,
 // and times each operation twice: until the DOM shows the end state (`dom`),
 // and until the frame after it has been produced (`frame`). Medians and the
 // spread are printed as JSON and appended to results/runtime.jsonl.
@@ -68,7 +69,16 @@ function implementations(app) {
 
 function page(script) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>bench</title>
-<style>.danger { background: #fdd; }</style></head><body>
+<style>.danger { background: #fdd; }
+.hidden { display: none; }
+.day { display: inline-block; vertical-align: top; width: 13rem; margin: 0 0.25rem; }
+.thumb { display: inline-block; width: 2rem; height: 2rem; background: #ddd; }
+.bar { height: 4px; background: #4a9; }
+@keyframes mascot-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes mascot-wave { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-35deg); } }
+.mascot-whole { animation: mascot-bob 1.2s ease-in-out 3; }
+.mascot[data-pose="wave"] .mascot-limb { transform-origin: 89px 60px; animation: mascot-wave 0.6s ease-in-out 4; }
+</style></head><body>
 <script type="module">
 try {
   ${script}
@@ -102,7 +112,18 @@ function serve(pages) {
 // until the end state holds, then wait for the next frame.
 const HELPERS = `
 window.__yield = () => new Promise((done) => { const channel = new MessageChannel(); channel.port1.onmessage = () => done(); channel.port2.postMessage(0); });
-window.__frame = () => new Promise((done) => requestAnimationFrame(() => setTimeout(done, 0)));
+// Every animation-frame callback the page asks for is timed, so an animation
+// written in either language is measured by the scripting it costs per frame.
+window.__raf = window.requestAnimationFrame.bind(window);
+window.__rafStats = { ms: 0, calls: 0, max: 0 };
+window.requestAnimationFrame = (callback) => window.__raf((stamp) => {
+  const started = performance.now();
+  try { callback(stamp); } finally {
+    const spent = performance.now() - started;
+    window.__rafStats.ms += spent; window.__rafStats.calls += 1; window.__rafStats.max = Math.max(window.__rafStats.max, spent);
+  }
+});
+window.__frame = () => new Promise((done) => window.__raf(() => setTimeout(done, 0)));
 window.__rows = () => document.querySelectorAll('#tbody > tr');
 window.__rowId = (index) => { const row = window.__rows()[index]; return row ? row.cells[0].textContent : null; };
 window.__measure = async (target, predicate) => {
@@ -121,6 +142,21 @@ window.__measure = async (target, predicate) => {
   await window.__frame();
   return { dom, frame: performance.now() - started };
 };
+// Like __measure, with an action in place of a click: typing into a box.
+window.__measureAction = async (action, predicate) => {
+  const started = performance.now();
+  action();
+  let spins = 0;
+  while (!predicate() && spins < 1000) { await null; ++spins; }
+  while (!predicate()) { await window.__yield(); if (++spins > 2000000) throw new Error('timed out'); }
+  const dom = performance.now() - started;
+  await window.__frame();
+  return { dom, frame: performance.now() - started };
+};
+window.__type = (text) => () => { const box = document.querySelector('#search-input'); box.value = text; box.dispatchEvent(new Event('input', { bubbles: true })); };
+window.__note = () => document.querySelector('#search-note').textContent;
+window.__slotName = (slot) => document.querySelector('[data-slot="' + slot + '"] .slot-name').textContent;
+window.__weekTotal = () => document.querySelector('#week-total').textContent;
 `;
 
 // Each suite's operations, in order, as [name, in-page async function body].
@@ -140,6 +176,33 @@ const SUITES = {
     ["create 10k", `return __measure('#runlots', () => __rows().length === 10000);`],
     ["memory 10k", `return { jsHeap: 0, linear: __linearMemory() };`],
     ["clear 10k", `return __measure('#clear', () => __rows().length === 0);`],
+  ],
+  // A meal planner's page (bench-meals / bench.meals.ui): a 7-day week of 4 meals
+  // with totals, its grocery list, a 240-recipe search and an SVG mascot.
+  meals: [
+    ["plan week", `return __measure('#plan', () => document.querySelectorAll('#week .slot').length === 28 && !!document.querySelector('#grocery .item'));`],
+    ["open tray", `return __measure('[data-slot="21"] .more', () => !document.querySelector('[data-slot="21"] .tray').classList.contains('hidden'));`],
+    ["open macros", `return __measure('#day-0 .macros-toggle', () => document.querySelectorAll('#day-0 .bar').length === 4);`],
+    ["shuffle meal", `const before = __slotName(21); return __measure('[data-slot="21"] .shuffle', () => __slotName(21) !== before);`],
+    ["add serving", `return __measure('[data-slot="21"] .serv-plus', () => document.querySelector('[data-slot="21"] .servings').textContent === '2');`],
+    ["remove meal", `return __measure('[data-slot="43"] .remove', () => document.querySelectorAll('#day-4 .slot').length === 3);`],
+    ["replan week", `const before = __weekTotal(); return __measure('#replan', () => __weekTotal() !== before && document.querySelectorAll('#week .slot').length === 28);`],
+    ["check item", `return __measure(() => document.querySelector('#grocery .aisle .check'), () => document.querySelectorAll('#checked .item').length === 1);`],
+    ["uncheck item", `return __measure('#checked .check', () => document.querySelectorAll('#checked .item').length === 0);`],
+    ["move day (FLIP)", `document.body.removeAttribute('data-flip');
+      Object.assign(__rafStats, { ms: 0, calls: 0, max: 0 });
+      const timed = await __measure('#move', () => document.querySelector('#week .day').id === 'day-1');
+      while (!document.body.hasAttribute('data-flip')) await new Promise((done) => setTimeout(done, 5));
+      return { ...timed, raf: { ...__rafStats }, moved: Number(document.body.getAttribute('data-flip')) };`],
+    ["type 7 keys", `let dom = 0, frame = 0;
+      for (const prefix of ['c', 'ch', 'chi', 'chic', 'chick', 'chicke', 'chicken']) {
+        const timed = await __measureAction(__type(prefix), () => __note().endsWith('"' + prefix + '"'));
+        dom += timed.dom; frame += timed.frame;
+      }
+      return { dom, frame };`],
+    ["clear search", `return __measureAction(__type(''), () => __note().endsWith('""') && document.querySelectorAll('#results li').length === 240);`],
+    ["wave", `return __measure('#pose', () => document.querySelector('#mascot').getAttribute('data-pose') === 'wave');`],
+    ["dom nodes", `return { nodes: document.getElementsByTagName('*').length };`],
   ],
 };
 
@@ -189,6 +252,12 @@ async function runImplementation(browser, base, name, path, operations, iteratio
       } else {
         add(`${operation} dom`, result.dom);
         add(`${operation} frame`, result.frame);
+        if (result.raf) {
+          add(`${operation} rAF script ms`, result.raf.ms);
+          add(`${operation} rAF callbacks`, result.raf.calls);
+          add(`${operation} rAF max ms`, result.raf.max);
+          add(`${operation} elements moved`, result.moved);
+        }
       }
     }
     if (errors.length) throw new Error(`${name}: ${errors.join("; ")}`);

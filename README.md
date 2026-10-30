@@ -16,6 +16,9 @@ Start with [`docs/REPORT.md`](docs/REPORT.md); its executive summary has the num
   js-framework-benchmark table. After five rounds of changes, an interaction (swap, remove, select,
   update) takes 1–6.5 ms, 5.5–7 times Leptos's work but in the same frame; building a list is
   2.7–3.8 times Leptos's work. What is left is in warp's compiler (allocation, call dispatch).
+- **On a page modelled on a real app** (a meal planner's week, grocery list, search and FLIP animation),
+  editing one meal is as fast as Leptos or faster, animation frames cost the same, and only creating
+  many elements at once is still 2–4.5 times Leptos. Its shipped code is 62 KB against 86 KB brotli.
 - **Bugs found on the way:** an ordering bug in ink's keyed diff (stock Proscenium puts a row in the
   wrong place after a move and an insert), and an ink test that never ran because a doc comment
   sat in front of `test>`.
@@ -77,6 +80,7 @@ Each branch is built on the one before it, and carries the ink and warp versions
 | [`perf-r5i`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r5i) | + ink `perf-r5`. The report's "Round 5" column. | round 5 |
 | [`perf-r5k`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r5k) | + single-pass key counts. | round 5 |
 | [`perf-r6`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r6) | + warp `perf-r5` (in-place append). No measurable change. | round 5 |
+| [`perf-r5m`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r5m) | `perf-r5i` + the meal-planner benchmark page (`bench.meals`). | round 5, meals |
 
 ## Reproducing
 

@@ -1,0 +1,460 @@
+type bench.meals.Recipe = { name : Text, kcal : Nat, protein : Nat, carbs : Nat, fat : Nat, ingredients : [Nat] }
+
+type bench.meals.Slot = { id : Nat, kind : Nat, recipe : Nat, servings : Nat }
+
+type bench.meals.Day = { id : Nat, slots : [bench.meals.Slot] }
+
+type bench.meals.Plan = { days : [bench.meals.Day], seed : Nat }
+
+type bench.meals.Totals = { kcal : Nat, protein : Nat, carbs : Nat, fat : Nat }
+
+ability bench.meals.Flip where
+  flipStart : () ->{bench.meals.Flip} ()
+
+bench.meals.Flip.doc : Doc
+bench.meals.Flip.doc = {{ Moves a page's cards with a FLIP spring: {flipStart} measures every `[data-flip-key]` element before a change, and on the next frame springs each one that moved back from where it was. }}
+
+bench.meals.methods : [Text]
+bench.meals.methods =
+  [ "roasted", "grilled", "baked", "steamed", "seared", "braised", "spiced", "smoky", "herby", "lemony"
+  , "crispy", "slow-cooked" ]
+
+bench.meals.proteins : [Text]
+bench.meals.proteins =
+  ["chicken", "salmon", "tofu", "turkey", "lentil", "egg", "beef", "shrimp", "chickpea", "pork"]
+
+bench.meals.forms : [Text]
+bench.meals.forms = ["bowl", "salad", "wrap", "stew", "skillet", "tacos", "soup", "traybake"]
+
+bench.meals.ingredients : [Text]
+bench.meals.ingredients =
+  [ "spinach", "chicken thighs", "milk", "sourdough", "brown rice", "frozen peas", "cumin"
+  , "sparkling water", "tomatoes", "salmon fillets", "greek yogurt", "tortillas", "lentils"
+  , "frozen berries", "paprika", "orange juice", "onions", "ground turkey", "cheddar", "pita"
+  , "chickpeas", "frozen corn", "oregano", "green tea", "peppers", "tofu", "eggs", "bagels", "quinoa"
+  , "frozen spinach", "chili flakes", "oat milk", "carrots", "shrimp", "butter", "rye bread", "pasta"
+  , "edamame", "turmeric", "kombucha", "lemons", "pork loin", "feta", "naan", "oats", "frozen mango"
+  , "black pepper", "coconut water" ]
+
+bench.meals.aisles : [Text]
+bench.meals.aisles =
+  ["Produce", "Meat and fish", "Dairy and eggs", "Bakery", "Pantry", "Frozen", "Spices", "Drinks"]
+
+bench.meals.dayNames : [Text]
+bench.meals.dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+bench.meals.kinds : [Text]
+bench.meals.kinds = ["Breakfast", "Lunch", "Dinner", "Snack"]
+
+{{ The word at `index` of `words`, or nothing. }}
+bench.meals.word : [Text] -> Nat -> Text
+bench.meals.word words index = List.at index words |> Optional.getOrElse ""
+
+{{ A number below `bound` from the generator the rows benchmark uses, with the next seed. }}
+bench.meals.draw : Nat -> Nat -> (Nat, Nat)
+bench.meals.draw bound seed =
+  seed' = bench.rows.nextSeed seed
+  (Nat.mod (seed' Nat./ 65536) bound, seed')
+
+{{ The meals benchmark's 240 recipes, drawn from seed 7; recipe `i` is a {bench.meals.kinds} `i mod 4`. The Leptos twin's `model::catalog` draws the same ones. }}
+bench.meals.catalog : '[Recipe]
+bench.meals.catalog = do
+  use Nat +
+  use Text ++
+  step acc _ =
+    (recipes, seed) = acc
+    (method, s1) = draw 12 seed
+    (protein, s2) = draw 10 s1
+    (form, s3) = draw 8 s2
+    (kcal, s4) = draw 550 s3
+    (proteinGrams, s5) = draw 45 s4
+    (carbs, s6) = draw 80 s5
+    (fat, s7) = draw 40 s6
+    (first, s8) = draw 48 s7
+    (second, s9) = draw 48 s8
+    (third, s10) = draw 48 s9
+    name = word methods method ++ " " ++ word proteins protein ++ " " ++ word forms form
+    recipe = Recipe name (150 + kcal) (5 + proteinGrams) (10 + carbs) (3 + fat) [first, second, third]
+    (recipes :+ recipe, s10)
+  at1 (List.foldLeft step ([], 7) (List.range 0 240))
+
+{{ A fresh week from `seed`: Monday first, four meals a day (one of each kind), one serving each. }}
+bench.meals.Plan.draw : Nat -> Plan
+bench.meals.Plan.draw seed0 =
+  use Nat * +
+  drawDay acc dayId =
+    (days, seed) = acc
+    drawSlot slotAcc kind =
+      (slots, slotSeed) = slotAcc
+      (pick, next) = draw 60 slotSeed
+      (slots :+ Slot (dayId * 10 + kind) kind (pick * 4 + kind) 1, next)
+    (slots, seed') = List.foldLeft drawSlot ([], seed) (List.range 0 4)
+    (days :+ Day dayId slots, seed')
+  (days, seed') = List.foldLeft drawDay ([], seed0) (List.range 0 7)
+  Plan days seed'
+
+{{ A new week, drawn on from where this one's generator left off. }}
+bench.meals.Plan.replan : Plan -> Plan
+bench.meals.Plan.replan plan = Plan.draw (Plan.seed plan)
+
+{{ Applies `edit` to the meal `slotId` (dropping it on `None`), threading the plan's generator through it. }}
+bench.meals.Plan.editSlot : Nat -> (Slot -> Nat -> (Optional Slot, Nat)) -> Plan -> Plan
+bench.meals.Plan.editSlot slotId edit plan =
+  use List ++
+  stepDay acc day =
+    (days, seed) = acc
+    stepSlot slotAcc slot =
+      (slots, slotSeed) = slotAcc
+      if Slot.id slot Nat.== slotId then
+        (edited, next) = edit slot slotSeed
+        (slots ++ Optional.toList edited, next)
+      else (slots :+ slot, slotSeed)
+    (slots, seed') = List.foldLeft stepSlot ([], seed) (Day.slots day)
+    (days :+ Day (Day.id day) slots, seed')
+  (days, seed') = List.foldLeft stepDay ([], Plan.seed plan) (Plan.days plan)
+  Plan days seed'
+
+{{ Another recipe of the same kind for meal `slotId`, never the one it had. }}
+bench.meals.Plan.shuffle : Nat -> Plan -> Plan
+bench.meals.Plan.shuffle slotId =
+  use Nat * +
+  redraw slot seed =
+    kind = Slot.kind slot
+    (pick, seed') = draw 60 seed
+    drawn = pick * 4 + kind
+    recipe = if drawn Nat.== Slot.recipe slot then Nat.mod (pick + 1) 60 * 4 + kind else drawn
+    (Some (Slot.recipe.set recipe slot), seed')
+  Plan.editSlot slotId redraw
+
+{{ One more serving of meal `slotId`. }}
+bench.meals.Plan.addServing : Nat -> Plan -> Plan
+bench.meals.Plan.addServing slotId =
+  Plan.editSlot slotId (slot seed -> (Some (Slot.servings.modify Nat.increment slot), seed))
+
+{{ The week without meal `slotId`. }}
+bench.meals.Plan.remove : Nat -> Plan -> Plan
+bench.meals.Plan.remove slotId = Plan.editSlot slotId (_ seed -> (None, seed))
+
+{{ The first day moves to the end of the week. }}
+bench.meals.Plan.rotate : Plan -> Plan
+bench.meals.Plan.rotate =
+  rotateDays = cases
+    first +: rest -> rest :+ first
+    []            -> []
+  Plan.days.modify rotateDays
+
+{{ Each meal of `day` with its recipe. }}
+bench.meals.resolve : [Recipe] -> Day -> [(Slot, Recipe)]
+bench.meals.resolve recipes day =
+  Day.slots day |> List.filterMap (slot -> List.at (Slot.recipe slot) recipes |> Optional.map (recipe -> (slot, recipe)))
+
+{{ What a day's meals add up to, servings counted. }}
+bench.meals.dayTotals : [(Slot, Recipe)] -> Totals
+bench.meals.dayTotals =
+  use Nat * +
+  add totals = cases
+    (slot, recipe) ->
+      servings = Slot.servings slot
+      Totals
+        (Totals.kcal totals + Recipe.kcal recipe * servings)
+        (Totals.protein totals + Recipe.protein recipe * servings)
+        (Totals.carbs totals + Recipe.carbs recipe * servings)
+        (Totals.fat totals + Recipe.fat recipe * servings)
+  List.foldLeft add (Totals 0 0 0 0)
+
+{{ Totals as a day card shows them. }}
+bench.meals.totalsText : Totals -> Text
+bench.meals.totalsText = cases
+  Totals kcal protein carbs fat ->
+    use Nat toText
+    use Text ++
+    toText kcal ++ " kcal · " ++ toText protein ++ " g protein · " ++ toText carbs ++ " g carbs · " ++ toText fat ++ " g fat"
+
+{{ The week's line: every day's totals added up. }}
+bench.meals.weekText : [(Day, [(Slot, Recipe)])] -> Text
+bench.meals.weekText days =
+  use Nat +
+  add totals = cases
+    (_, slots) ->
+      day = dayTotals slots
+      Totals
+        (Totals.kcal totals + Totals.kcal day)
+        (Totals.protein totals + Totals.protein day)
+        (Totals.carbs totals + Totals.carbs day)
+        (Totals.fat totals + Totals.fat day)
+  "Week: " Text.++ totalsText (List.foldLeft add (Totals 0 0 0 0) days)
+
+{{ The bar widths of a day's macros panel: kcal, protein, carbs and fat against 2,000, 120, 250 and 70, capped at 100. }}
+bench.meals.barWidths : Totals -> [Nat]
+bench.meals.barWidths = cases
+  Totals kcal protein carbs fat ->
+    width value target = Nat.min 100 (value Nat.* 100 Nat./ target)
+    [width kcal 2000, width protein 120, width carbs 250, width fat 70]
+
+{{ Servings of each ingredient the week needs, by ingredient index. }}
+bench.meals.groceryCounts : [(Day, [(Slot, Recipe)])] -> [(Nat, Nat)]
+bench.meals.groceryCounts days =
+  addSlot counts = cases
+    (slot, recipe) ->
+      servings = Slot.servings slot
+      addIngredient acc ingredient =
+        before = Map.get ingredient acc |> Optional.getOrElse 0
+        Map.insert ingredient (before Nat.+ servings) acc
+      List.foldLeft addIngredient counts (Recipe.ingredients recipe)
+  Map.toList (List.foldLeft addSlot Map.empty (List.flatMap at2 days))
+
+{{ The unchecked items of `counts` by aisle (in aisle order, then by name), and the checked ones by name. }}
+bench.meals.grocerySections : [(Nat, Nat)] -> [Text] -> ([(Text, [(Text, Nat)])], [(Text, Nat)])
+bench.meals.grocerySections counts checked =
+  name ingredient = word ingredients ingredient
+  isChecked ingredient = List.contains (name ingredient) checked
+  named items = items |> List.map (cases (ingredient, count) -> (name ingredient, count)) |> List.sortBy at1
+  inAisle aisle = counts |> List.filter (cases (ingredient, _) -> (Nat.mod ingredient 8 Nat.== aisle) && Boolean.not (isChecked ingredient)) |> named
+  section = cases
+    (aisleName, aisle) ->
+      match inAisle aisle with
+        []    -> None
+        items -> Some (aisleName, items)
+  sections = List.filterMap section (List.indexed aisles)
+  (sections, counts |> List.filter (cases (ingredient, _) -> isChecked ingredient) |> named)
+
+{{ The mascot's markup, set as inner HTML as a real app sets a generated sprite; the page's stylesheet animates `.mascot-whole` and `.mascot-limb`. }}
+bench.meals.mascotSvg : Text
+bench.meals.mascotSvg =
+  "<svg viewBox=\"0 0 120 120\" width=\"120\" height=\"120\"><g class=\"mascot-whole\"><ellipse cx=\"60\" cy=\"74\" rx=\"30\" ry=\"36\" fill=\"#7bc\"/><circle cx=\"60\" cy=\"34\" r=\"22\" fill=\"#9cd\"/><circle cx=\"52\" cy=\"30\" r=\"3\"/><circle cx=\"68\" cy=\"30\" r=\"3\"/><g class=\"mascot-limb\"><rect x=\"84\" y=\"56\" width=\"10\" height=\"34\" rx=\"5\" fill=\"#7bc\"/></g></g></svg>"
+
+{{ Runs `step` on the next animation frame. }}
+bench.meals.onFrame : '{JS} () ->{JS} ()
+bench.meals.onFrame step =
+  JSValue.invoke1_ "requestAnimationFrame" (JSValue.callback1_ (_ -> step())) (JSValue.global "window")
+
+{{ Where each `[data-flip-key]` element is now: its key, the element, and its left and top. }}
+bench.meals.flipPositions : '{JS} [(Text, JSValue, Float, Float)]
+bench.meals.flipPositions = do
+  use JSValue asFloat! getProperty
+  nodes = JSValue.invokeText1 "querySelectorAll" "[data-flip-key]" (JSValue.global "document")
+  position element =
+    rect = JSValue.invoke0 "getBoundingClientRect" element
+    key = JSValue.invokeText1 "getAttribute" "data-flip-key" element |> JSValue.asText!
+    (key, element, getProperty "left" rect |> asFloat!, getProperty "top" rect |> asFloat!)
+  JSValue.global "Array" :: "from" :$ [nodes] |> JSValue.asList! |> List.map position
+
+{{ One frame of the spring: each moved element `remaining` of the way back from where it was. The last frame clears the transforms and reports how many elements moved on `body[data-flip]`. }}
+bench.meals.flipFrame : [(JSValue, Float, Float)] -> Nat ->{JS} ()
+bench.meals.flipFrame moved frame =
+  use Float *
+  use JSValue getProperty
+  use Text ++
+  frames = 30
+  if frame Nat.< frames then
+    remaining = Float.pow ((Nat.toFloat frames Float.- Nat.toFloat frame) Float./ Nat.toFloat frames) 3.0
+    place = cases
+      (element, dx, dy) ->
+        transform = "translate(" ++ Float.toText (dx * remaining) ++ "px, " ++ Float.toText (dy * remaining) ++ "px)"
+        JSValue.invokeText2_ "setProperty" "transform" transform (getProperty "style" element)
+    List.foreach place moved
+    onFrame do flipFrame moved (frame Nat.+ 1)
+  else
+    List.foreach (cases (element, _, _) -> JSValue.invokeText1_ "removeProperty" "transform" (getProperty "style" element)) moved
+    JSValue.invokeText2_ "setAttribute" "data-flip" (Nat.toText (List.size moved)) (getProperty "body" (JSValue.global "document"))
+
+{{ The second half of a FLIP, after the change has rendered: each element whose position changed starts the spring from its old place. }}
+bench.meals.flipLast : [(Text, JSValue, Float, Float)] ->{JS} ()
+bench.meals.flipLast first =
+  firstByKey = first |> List.map (cases (key, _, left, top) -> (key, (left, top))) |> Map.fromList
+  offset = cases
+    (key, element, left, top) ->
+      match Map.get key firstByKey with
+        Some (firstLeft, firstTop) | (firstLeft Float.!= left) || (firstTop Float.!= top) ->
+          Some (element, firstLeft Float.- left, firstTop Float.- top)
+        _ -> None
+  flipFrame (List.filterMap offset flipPositions()) 0
+
+{{ The {type Flip} provider for a browser page. }}
+bench.meals.flipProvider : Provider JS {Flip}
+bench.meals.flipProvider =
+  handler : Request {Flip} () ->{JS} ()
+  handler = cases
+    { flipStart _ -> resume } ->
+      first = flipPositions()
+      onFrame do flipLast first
+      handle resume () with handler
+    { () } -> ()
+  Provider.define handler
+
+{{ One meal: its picture, name and numbers, and a "more" tray of controls. }}
+bench.meals.slotView : ((Plan -> Plan) ->{Update} ()) -> ((Optional Nat ->{Flip} Optional Nat) ->{Update} ()) -> Boolean -> Slot -> Recipe ->{Render {Flip}} ()
+bench.meals.slotView editPlan setTray isOpen slot recipe =
+  use Nat * toText
+  use Render text
+  use Text ++
+  slotId = Slot.id slot
+  servings = Slot.servings slot
+  region slotId do
+    el.div [class "slot", attribute "data-slot" (toText slotId)] do
+      span [class "thumb"] do ()
+      el.div [class "slot-main"] do
+        span [class "slot-type"] do text (word kinds (Slot.kind slot))
+        span [class "slot-name"] do text (Recipe.name recipe)
+        span [class "slot-kcal"] do text (toText (Recipe.kcal recipe * servings) ++ " kcal")
+        span [class "slot-protein"] do text (toText (Recipe.protein recipe * servings) ++ " g protein")
+      button [class "more", onClick do setTray (open -> if open === Some slotId then None else Some slotId)] do text "⋯"
+      el.div [class (if isOpen then "tray" else "tray hidden")] do
+        button [class "info"] do text "Info"
+        button [class "recipe"] do text "Recipe"
+        span [class "servings"] do text (toText servings)
+        button [class "serv-plus", onClick do editPlan (Plan.addServing slotId)] do text "+"
+        button [class "shuffle", onClick do editPlan (Plan.shuffle slotId)] do text "Shuffle"
+        button [class "remove", onClick do editPlan (Plan.remove slotId)] do text "Remove"
+
+{{ One day: its totals, a macros panel it can open, and its meals. Which panel and tray are open is the card's own state. }}
+bench.meals.dayView : ((Plan -> Plan) ->{Update} ()) -> Day -> [(Slot, Recipe)] ->{Render {Flip}} ()
+bench.meals.dayView editPlan day slots =
+  use Nat toText
+  use Render text
+  use Text ++
+  dayId = Day.id day
+  key = "day-" ++ toText dayId
+  region dayId do
+    (macrosOpen, updateMacros) = useState do false
+    setMacros : (Boolean ->{Flip} Boolean) ->{Update} ()
+    setMacros change = updateMacros change
+    (tray, updateTray) = useState do None
+    setTray : (Optional Nat ->{Flip} Optional Nat) ->{Update} ()
+    setTray change = updateTray change
+    totals = dayTotals slots
+    bar : Nat ->{Render {Flip}} ()
+    bar width = el.div [class "bar", attribute "style" ("width: " ++ toText width ++ "%")] do ()
+    meal : (Slot, Recipe) ->{Render {Flip}} ()
+    meal = cases (slot, recipe) -> slotView editPlan setTray (tray === Some (Slot.id slot)) slot recipe
+    toggleMacros : '{Flip, Update} ()
+    toggleMacros = do setMacros Boolean.not
+    element "section" [attr.id key, class "day", attribute "data-flip-key" key] do
+      element "h3" [class "day-name"] do text (word dayNames dayId)
+      element "p" [class "day-totals"] do text (totalsText totals)
+      button [class "macros-toggle", onClick toggleMacros] do text "Calories and macros"
+      when macrosOpen do
+        el.div [class "macros"] do
+          List.foreach bar (barWidths totals)
+      List.foreach meal slots
+
+{{ The grocery list the week needs, by aisle, with checked items kept at the foot. What is checked is the list's own state. }}
+bench.meals.groceryView : [(Nat, Nat)] ->{Render {Flip}} ()
+bench.meals.groceryView counts =
+  use Render text
+  region "grocery" do
+    (checked, updateChecked) = useState do []
+    setChecked : ([Text] ->{Flip} [Text]) ->{Update} ()
+    setChecked change = updateChecked change
+    toggle : Text ->{Update} ()
+    toggle name = setChecked (names -> if List.contains name names then List.filter (other -> other Text.!= name) names else names :+ name)
+    item : (Text, Nat) ->{Render {Flip}} ()
+    item = cases
+      (name, count) ->
+        region name do
+          element "li" [class "item", attribute "data-name" name] do
+            button [class "check", onClick do toggle name] do text "✓"
+            span [class "name"] do text name
+            span [class "qty"] do text ("×" Text.++ Nat.toText count)
+    (sections, done) = grocerySections counts checked
+    aisleSection : (Text, [(Text, Nat)]) ->{Render {Flip}} ()
+    aisleSection = cases
+      (aisle, items) ->
+        region aisle do
+          element "section" [class "aisle"] do
+            element "h4" [] do text aisle
+            element "ul" [] do List.foreach item items
+    List.foreach aisleSection sections
+    element "section" [attr.id "checked"] do
+      element "h4" [] do text "Checked"
+      element "ul" [] do List.foreach item done
+
+{{ The recipe search: an input that never reads its own value, a count, and the matching recipes, keyed by catalog index. The query is the search's own state. }}
+bench.meals.searchView : '{Render {Flip}} ()
+bench.meals.searchView = do
+  use Nat toText
+  use Render text
+  use Text ++
+  region "search" do
+    recipes = useMemo catalog
+    (query, updateQuery) = useState do ""
+    setQuery : (Text ->{Flip} Text) ->{Update} ()
+    setQuery change = updateQuery change
+    results = List.indexed recipes |> List.filter (cases (recipe, _) -> Text.contains query (Recipe.name recipe))
+    result : (Recipe, Nat) ->{Render {Flip}} ()
+    result = cases
+      (recipe, index) ->
+        region index do
+          element "li" [class "result"] do
+            span [class "name"] do text (Recipe.name recipe)
+            span [class "kcal"] do text (toText (Recipe.kcal recipe) ++ " kcal")
+            button [class "add"] do text "Add"
+    onQuery : Text ->{Flip, Update} ()
+    onQuery value = setQuery (_ -> value)
+    queryListener : Modifier {Flip}
+    queryListener = Render.on "input" (Extractor.at "target" (Extractor.at "value" Extractor.text)) onQuery
+    el.div [attr.id "search"] do
+      voidElement "input" [attr.id "search-input", attribute "type" "search", queryListener]
+      element "p" [attr.id "search-note"] do
+        text ("Showing " ++ toText (List.size results) ++ " of " ++ toText (List.size recipes) ++ " for \"" ++ query ++ "\"")
+      element "ul" [attr.id "results"] do List.foreach result results
+
+{{
+A meal-planning page, written as Proscenium writes it: the week is the root's state and each day and meal is a keyed region, so an edit re-renders the days it changed; a day card's open panels, the grocery list's checks and the search query are each their own component's state; moving a day animates the cards that moved with a FLIP spring ({type Flip}); and the mascot is inline SVG animated by CSS alone. Its Leptos twin is the `bench-meals` crate.
+}}
+bench.meals.ui : '{Flip, Render {Flip}} ()
+bench.meals.ui = do
+  use Render text
+  recipes = useMemo catalog
+  (plan, updatePlan) = useState do None
+  setPlan : (Optional Plan ->{Flip} Optional Plan) ->{Update} ()
+  setPlan change = updatePlan change
+  (pose, updatePose) = useState do "idle"
+  setPose : (Text ->{Flip} Text) ->{Update} ()
+  setPose change = updatePose change
+  editPlan : (Plan -> Plan) ->{Update} ()
+  editPlan change = setPlan (Optional.map change)
+  planWeek : '{Flip, Update} ()
+  planWeek = do setPlan (_ -> Some (Plan.draw 42))
+  replanWeek : '{Flip, Update} ()
+  replanWeek = do editPlan Plan.replan
+  moveDay : '{Flip, Update} ()
+  moveDay = do
+    flipStart()
+    editPlan Plan.rotate
+  wave : '{Flip, Update} ()
+  wave = do setPose (current -> if current Text.== "idle" then "wave" else "idle")
+  day : (Day, [(Slot, Recipe)]) ->{Render {Flip}} ()
+  day = cases (day, slots) -> dayView editPlan day slots
+  el.div [attr.id "app"] do
+    el.div [class "buttons"] do
+      button [attr.id "plan", onClick planWeek] do text "Plan my week"
+      button [attr.id "replan", onClick replanWeek] do text "Re-plan"
+      button [attr.id "move", onClick moveDay] do text "Move Monday to the end"
+      button [attr.id "pose", onClick wave] do text "Wave"
+    el.div [attr.id "mascot", class "mascot", attribute "data-pose" pose, property "innerHTML" (Json.text mascotSvg)] do ()
+    resolved = match plan with
+      Some plan -> Plan.days plan |> List.map (day -> (day, resolve recipes day))
+      None      -> []
+    el.div [attr.id "week"] do
+      when (Optional.isSome plan) do
+        element "p" [attr.id "week-total"] do text (weekText resolved)
+        List.foreach day resolved
+    el.div [attr.id "grocery"] do
+      when (Optional.isSome plan) do groceryView (groceryCounts resolved)
+    searchView()
+
+{{ `run bench.meals.build <bare|debug> <outDir>`: one full warp build of the meals page, written as `meals-<config>`. }}
+bench.meals.build : '{IO, Exception} ()
+bench.meals.build = do
+  use Text ++
+  match getArgs() with
+    [configName, outDir] ->
+      match configs configName with
+        Some config ->
+          body = do
+            warp.withProgressEvents config do
+              exposeFunction_ "main" (_ -> mount (JSValue.global "document" :: "body") flipProvider ui)
+          report ("meals-" ++ configName) (FilePath outDir) (withPhaseTimes body)
+        None -> printLine ("unknown config: " ++ configName)
+    _ -> printLine "usage: bench.meals.build <bare|debug> <outDir>"
