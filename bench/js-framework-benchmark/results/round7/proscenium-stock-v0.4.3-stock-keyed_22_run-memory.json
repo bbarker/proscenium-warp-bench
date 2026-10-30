@@ -1,0 +1,1 @@
+{"framework":"proscenium-stock-v0.4.3-stock-keyed","keyed":true,"benchmark":"22_run-memory","type":"memory","values":{"DEFAULT":{"min":18.550904273986816,"max":18.573243141174316,"median":18.572941780090332,"mean":18.565696398417156,"stddev":0.01281124168446208,"values":[18.550904273986816,18.573243141174316,18.572941780090332]}}}

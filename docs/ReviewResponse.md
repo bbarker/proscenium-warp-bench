@@ -89,6 +89,13 @@ A local run (10 iterations, Chromium 149) puts round 7 against Leptos 0.7.0's en
 - **First paint:** 353 against 365 ms.
 - **Memory:** 0.85 against 1.79 MB when ready, and 15.3 against 5.4 MB with 1,000 rows.
 - **Size:** 54 against 49 KB compressed.
+- **Stock, for scale:** stock Proscenium 0.4.3 in the same suite takes 2.0 s to create
+  1,000 rows and 40 s to swap two.
+
+On the meals page, a meal edit now takes about half Leptos's time. Part of that came from
+an app change the counts pointed to. A `region` is a key, not a skip boundary: its body
+runs with its parent's render, and only elements are skipped. So the search's filter
+moved inside its element.
 
 The report's "In js-framework-benchmark" section has the full table and how it relates to
 the harness's numbers.
@@ -121,5 +128,21 @@ paid off for `compare`, `==` and `List`.
 | warp `perf` | `Universal.compare` and `==` in wasm | Yes |
 | warp `perf-r4` | `List` as a wasm tree of arrays (with a 9,000-operation differential test); typed JS calls | Yes |
 | warp `perf-r5` | in-place `List.:+` | No: no measurable change |
-| warp `perf-r7` | unboxed JS builtins, `==` for functions, shared result boxes | Yes |
+| warp `perf-r7` | unboxed JS builtins (`jsUnboxed`), `==` for functions, shared result boxes (`sharedValues`), `Text.size`/`take`/`drop` over `wasm:js-string` | Yes |
+| warp `perf-r7u`, `perf-r7w` | `Nat.toText` in Unison and in the DSL, for the comparison above | No: experiments |
 | Proscenium `perf-fine` … `perf-r5` | key hints as data, `elementWith`, `Keyed`, `Selector`, DOM sync bottom-up | If ink stays; `Keyed` and `Selector` either way |
+| Proscenium `perf-r7`, `bench-jfb` | the benchmark apps, including `bench.jfb` and `bench.jfbstock` for js-framework-benchmark | Bench code only |
+
+All the warp branches are against 1.3.0. Share has 1.4.2, whose `Universal.compare`
+tightened the function and closure cases. So moving our wasm `compare` and `==` onto it
+means taking 1.4.2's JS as their fallback and matching its ordering, not just
+re-applying the change.
+
+## Design notes, not built
+
+- `docs/ProsceniumTree.md`: a tree of Proscenium's own in place of ink, one handler,
+  behind the current API.
+- `docs/TailResumptive.md`: compiling a handler that resumes once, at the end, as a
+  direct call. Neither hot clause is pure: ink's performs `Stream`, and Proscenium's
+  performs `Incremental`. So the direct path is conditioned on no frame in between
+  handling what the clause performs, which `shift`'s walk can check.

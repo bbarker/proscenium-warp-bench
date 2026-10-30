@@ -197,6 +197,16 @@ repeat it.
   - **What is left:** allocation and ability operations. The next step is a tree of
     Proscenium's own (`docs/ProsceniumTree.md`), the author's preferred direction,
     which removes one of the two ability operations per element.
+  - **On the meals page,** a meal edit now takes about half Leptos's time (shuffle 0.9
+    against 2.3 ms). Part of that came from moving the search's filter behind a skip
+    boundary: in Proscenium a `region` is a key, not a memo, and only elements are
+    skipped.
+  - **In js-framework-benchmark** (local run, against Leptos 0.7.0's entry), round 7 is:
+    - 1.3–2.3 times Leptos on list operations;
+    - faster on select and first paint;
+    - lighter when ready;
+    - 2.8 times the memory with 1,000 rows;
+    - about the same size.
 - **A Leptos limit we may hit:** the 1,600-card benchmark app puts 80 page components in
   one `view!`, and mounting it overflowed wasm's default 1 MB stack. This happened in both
   dev and release builds, as `memory access out of bounds`, and an 8 MB stack fixed it.
@@ -1358,8 +1368,14 @@ Two findings about the apps themselves:
 - **Leptos's cards page** makes 652,075 calls into JS to mount 400 cards. That is why it is
   ready in 273 ms against warp's 89.
 - **The meals page's search filters all 240 recipes again on every root re-render,**
-  "wave" included, so its region is not being skipped. That is a Proscenium-side
-  question, below.
+  "wave" included. The reason is in Proscenium:
+  - `region` is a keyed `fragment`, which lengthens the hint path and runs its body as
+    part of its parent's render. It is not a computation ink can skip; only elements
+    are.
+  - So a region's body, and the filter in it, runs whenever its parent renders, and the
+    elements it then produces are skipped.
+
+  `docs/ProsceniumTree.md` makes the region the skip boundary.
 
 #### Inside the module
 
@@ -1488,8 +1504,8 @@ warp now crosses the boundary about as often as Leptos, or less. The JS glue cal
 into wasm about 10 times per operation (the event's entry and the microtask flush), down
 from 161,186 for creating 1,000 rows. The meals page's remaining imports are DOM calls and
 `Text.indexOf`, which is still a JS call, now unboxed. It is called 240 times per run of
-the search: the search re-runs on every root re-render, which is the Proscenium question
-noted under "Measured attribution".
+the search: a region's body runs whenever its parent renders, since only elements are
+skip boundaries ("Measured attribution").
 
 **Inside the module**, creating 1,000 rows after wasm-opt (`results/sites-rows-r7.json`,
 taken before `Nat.toText`, `Text.indexOf` and the shared `()` changed):
@@ -1547,6 +1563,41 @@ What it shows:
   is the work of "A tree of Proscenium's own" (`docs/ProsceniumTree.md`) and of warp's
   continuation handling, below.
 
+#### The meals search, behind a skip boundary
+
+Proscenium's `region` is a key, not a skip boundary: its body runs whenever its parent
+renders, and only elements are computations ink can skip. The meals page's search
+filtered its 240 recipes in its region's body, so every root re-render filtered again: a
+shuffle, a serving, the mascot's pose. The Leptos twin keeps its results in a `Memo` on
+the query and does not. Moving the filter inside the `#search` element's body puts it
+behind a boundary. That element's closure captures only the query, the catalog and the
+listener, so an unrelated re-render skips it.
+
+The change is `bench.meals.searchView` on Proscenium `perf-r7`, an app change only.
+- **Check:** the page matches Leptos through 240 steps.
+- **Crossings:** `Text.indexOf` calls for a shuffle fall from 240 to 0, and that
+  operation's calls into JS from 283 to 43.
+
+Medians of 10, interleaved, load 10–12 (`results/round7-search-meals.json`):
+
+| Operation (ms) | Leptos | Round 7 | Round 7, filter moved |
+| --- | --- | --- | --- |
+| page ready | 24.7 | 50.9 | 42.2 |
+| shuffle a meal | 2.3 | 2.1 | **0.9** |
+| one more serving | 1.5 | 1.2 | **0.8** |
+| remove a meal | 1.7 | 1.7 | **1.2** |
+| check a grocery item | 0.6 | 0.9 | **0.6** |
+| move a day (FLIP) | 2.3 | 1.9 | **1.4** |
+| plan the week | 5.1 | 11.6 | 10.7 |
+| type 7 keys | 2.4 | 7.3 | 6.7 |
+
+- **Editing one meal now takes about half Leptos's time.**
+- **Building many elements** (planning the week, typing, bringing back the results) is
+  still 2–4 times Leptos.
+- **For Proscenium users:** put work derived from state inside the element that shows
+  it, not in the region around it. `docs/ProsceniumTree.md` proposes making the region
+  the boundary instead.
+
 #### In js-framework-benchmark
 
 The author pointed to
@@ -1570,23 +1621,23 @@ The suite's time runs from the click to the end of the frame that paints the res
 slows the CPU 16 times for partial update and 8 times for clear, so those are not
 comparable with this report's other tables:
 
-| Benchmark (median) | Proscenium r7 | Leptos 0.7.0 | vanillajs |
-| --- | --- | --- | --- |
-| create 1,000 rows (ms) | 145.4 | 69.4 | 64.0 |
-| replace all 1,000 rows | 177.1 | 78.7 | 70.2 |
-| partial update, ×16 slowdown | 86.6 | 29.3 | 32.4 |
-| select a row | **8.6** | 18.0 | 10.8 |
-| swap two rows | 130.2 | 82.1 | 53.4 |
-| remove a row | 93.8 | 61.8 | 48.3 |
-| create 10,000 rows | 1,445.8 | 1,077.1 | 770.1 |
-| append 1,000 to 1,000 | 255.6 | 121.9 | 107.5 |
-| clear 1,000 rows, ×8 slowdown | 97.8 | 69.5 | 33.6 |
-| first paint (ms) | **352.8** | 364.7 | 173.4 |
-| memory when ready (MB) | **0.85** | 1.79 | 0.58 |
-| memory with 1,000 rows (MB) | 15.3 | 5.4 | 1.9 |
-| memory after creating and clearing, ×5 (MB) | **1.59** | 4.58 | 0.66 |
-| size, uncompressed (KB) | 191.9 | 189.6 | 11.3 |
-| size, compressed (KB) | 54.3 | 48.8 | 2.5 |
+| Benchmark (median) | Proscenium r7 | Leptos 0.7.0 | vanillajs | stock Proscenium (3 runs) |
+| --- | --- | --- | --- | --- |
+| create 1,000 rows (ms) | 145.4 | 69.4 | 64.0 | 2,048 |
+| replace all 1,000 rows | 177.1 | 78.7 | 70.2 | 24,492 |
+| partial update, ×16 slowdown | 86.6 | 29.3 | 32.4 | 1,730 |
+| select a row | **8.6** | 18.0 | 10.8 | 932 |
+| swap two rows | 130.2 | 82.1 | 53.4 | 40,343 |
+| remove a row | 93.8 | 61.8 | 48.3 | 561 |
+| create 10,000 rows | 1,445.8 | 1,077.1 | 770.1 | 27,731 |
+| append 1,000 to 1,000 | 255.6 | 121.9 | 107.5 | 2,654 |
+| clear 1,000 rows, ×8 slowdown | 97.8 | 69.5 | 33.6 | 390 |
+| first paint (ms) | **352.8** | 364.7 | 173.4 | 239.5 |
+| memory when ready (MB) | **0.85** | 1.79 | 0.58 | 0.94 |
+| memory with 1,000 rows (MB) | 15.3 | 5.4 | 1.9 | 18.6 |
+| memory after creating and clearing, ×5 (MB) | **1.59** | 4.58 | 0.66 | 2.05 |
+| size, uncompressed (KB) | 191.9 | 189.6 | 11.3 | 148.8 |
+| size, compressed (KB) | 54.3 | 48.8 | 2.5 | 43.0 |
 
 On the suite's own measure, round 7 is 1.3–3 times Leptos where lists change, and faster
 where little does:
@@ -1597,6 +1648,8 @@ where little does:
 - **Memory with 1,000 rows** is 2.8 times Leptos's. That is the allocation the counts
   above show, live while the rows are.
 - **The shipped code** is about the same size.
+- **Stock Proscenium** (`keyed/proscenium-stock`, 3 runs, for scale) takes 14–310 times as long as round 7 on the list operations: 2.0 s to create 1,000 rows, 40 s to swap two.
+- **Stock paints first sooner,** at 240 ms against round 7's 353, with a smaller bundle (43 against 54 KB). The two apps also mount differently: stock into `body`, round 7 into `#main` through an interop call. Why round 7 starts slower has not been looked into yet.
 
 **Against this report's harness.**
 - **The totals are closer than ours:** paint takes about the same time in both

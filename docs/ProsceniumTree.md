@@ -73,6 +73,15 @@ One handler, Proscenium's, and a retained tree of Proscenium's own nodes.
   - A region whose body closure equals its previous one (`Universal.==`, now entirely
     in wasm for closures) is reused whole, as ink skips an unchanged computation.
   - A region with pending messages is never skipped.
+  - This is a change from today. Now, `region` is a keyed `fragment`, which lengthens the
+    hint path and runs its body in its parent's render. Only elements are computations
+    that ink can skip. So a region's body, and whatever it computes, runs on every render
+    of its parent, even when nothing it reads changed. The meals page shows it: setting
+    the mascot's pose re-renders the root, and the search region filters all 240 recipes
+    again (240 `Text.indexOf` calls), before its elements are skipped. Making the region
+    the skip boundary fixes that. Within today's design, it would take a `fragment`
+    reconciled as a computation whose result its parent reads (ink's `compute`, not
+    `compute_`).
 - **State slots** are numbered by call order within their node. A message names the
   node's path and the slot, and marks that node for re-rendering. The next flush
   re-renders only the marked nodes, outermost first, which is what ink's `compute_` gives

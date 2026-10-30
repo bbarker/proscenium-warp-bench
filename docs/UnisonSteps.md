@@ -197,6 +197,13 @@ Each later change to warp `perf-r7` was picked up the same way, with
 The `perf-r7u` and `perf-r7w` branches were made from Proscenium `perf-r7` while its lib
 was `dfreeman_warp_r7d`.
 
+`perf-r7` also redefines `bench.meals.searchView`, with the filter inside the `#search`
+element so that it sits behind a skip boundary. That is the last definition in
+`proscenium--perf-r7.u`, and it is loaded with `update`, not `add`, since it replaces a
+term. Its build is `compile bench.meals.build target/unison/frontend-bench/meals-build-r7s`,
+built with `nu bench/frontend-wasm/bench.nu warp meals --variant r7s`. The `meals-r7`
+build in the report predates it.
+
 The js-framework-benchmark app is on `perf-r7` too (`bench.jfb`):
 
 ```ucm

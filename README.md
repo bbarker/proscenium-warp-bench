@@ -28,7 +28,15 @@ Start with [`docs/REPORT.md`](docs/REPORT.md); its executive summary has the num
     row, two per element. `docs/ProsceniumTree.md` is the design for removing one of the
     two.
 - **js-framework-benchmark:** Proscenium has a local entry (`bench/js-framework-benchmark/`)
-  that passes the suite's keyed check, in a stock and a round 7 version.
+  that passes the suite's keyed check, in a stock and a round 7 version. Round 7 against
+  Leptos 0.7.0's entry:
+  - 1.3–2.3 times Leptos on list operations;
+  - select: 8.6 against 18.0 ms;
+  - first paint: 353 against 365 ms;
+  - memory: half when ready, 2.8 times with 1,000 rows;
+  - size: 54 against 49 KB compressed.
+- **Meals page, round 7:** a meal edit takes about half Leptos's time, after moving the
+  search's filter inside its element. A Proscenium `region` is not a skip boundary.
 - **On a page modelled on a real app** (a meal planner's week, grocery list, search and FLIP animation),
   editing one meal is as fast as Leptos or faster, animation frames cost the same, and only creating
   many elements at once is still 2–4.5 times Leptos. Its shipped code is 62 KB against 86 KB brotli.
@@ -69,7 +77,9 @@ clone of the upstream project named in the first row, and the report writes them
 | [`perf`](https://share.unison-lang.org/@nusentry/warp/code/perf) | `Universal.compare` and `Universal.==` in wasm. From warp 1.3.0. | round 1 |
 | [`perf-r4`](https://share.unison-lang.org/@nusentry/warp/code/perf-r4) | `List` as a wasm tree of arrays, direct typed JS calls, a list fuzz test. | round 4–5 |
 | [`perf-r5`](https://share.unison-lang.org/@nusentry/warp/code/perf-r5) | `List.:+` appends in place; sharing tests. | round 5 |
-| [`perf-r7`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7) | From `perf-r4`: JS interop, `Nat.toText` and `Text.indexOf` take unboxed arguments (`jsUnboxed`); `==` compares a function with a closure by id in wasm; `compare`, `==` and Boolean intrinsics return shared boxes. | round 7 |
+| [`perf-r7`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7) | From `perf-r4`: JS interop, `Nat.toText` and `Text.indexOf` take unboxed arguments (`jsUnboxed`); `==` compares a function with a closure by id in wasm; `compare`, `==` and Boolean intrinsics return shared boxes; `Text.size`/`take`/`drop` over `wasm:js-string`. | round 7 |
+| [`perf-r7u`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7u) | `perf-r7` with `Nat.toText` written in Unison (an experiment: 8 times slower than unboxed JS). | round 7 |
+| [`perf-r7w`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7w) | `perf-r7` with `Nat.toText` in the instruction DSL (an experiment: 5 times slower than unboxed JS). | round 7 |
 
 A note on 1.3.0: Proscenium 0.4.3, which the benchmark builds on, uses warp 1.3.0. The warp changes
 replace whole definitions as they were in 1.3.0, so apply them to a 1.3.0 clone and not to a newer
@@ -97,6 +107,7 @@ Each branch is built on the one before it, and carries the ink and warp versions
 | [`perf-r5m`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r5m) | `perf-r5i` + the meal-planner benchmark page (`bench.meals`). | round 5, meals |
 | [`perf-r7`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7) | `perf-r5m` on warp `perf-r7`, + the js-framework-benchmark app (`bench.jfb`). | round 7 |
 | [`bench-jfb`](https://share.unison-lang.org/@nusentry/proscenium/code/bench-jfb) | `bench` + the js-framework-benchmark app for stock Proscenium (`bench.jfbstock`). | round 7 |
+| [`perf-r7u`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7u), [`perf-r7w`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7w) | `perf-r7` on warp `perf-r7u` and `perf-r7w`, for timing `Nat.toText` (`bench.totext`). | round 7 |
 
 ## Reproducing
 

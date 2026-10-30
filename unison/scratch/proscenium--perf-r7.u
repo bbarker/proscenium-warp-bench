@@ -78,3 +78,33 @@ bench.totext.build = do
         Some config -> report ("totext-" ++ configName) (FilePath outDir) (withPhaseTimes do warp.withProgressEvents config do exposeFunction_ "main" runLoop)
         None -> printLine ("unknown config: " ++ configName)
     _ -> printLine "usage: <bare|debug> <outDir>"
+
+{{ The recipe search: an input that never reads its own value, a count, and the matching recipes, keyed by catalog index. The query is the search's own state. The filter runs inside the `#search` element's body, which ink skips when the query, the catalog and the listener are unchanged, so a re-render of the page for anything else does not filter again, as the Leptos twin's `Memo` does not. (A `region` is not a skip boundary: its body runs with its parent's.) }}
+bench.meals.searchView : '{Render {Flip}} ()
+bench.meals.searchView = do
+  use Nat toText
+  use Render text
+  use Text ++
+  region "search" do
+    recipes = useMemo catalog
+    (query, updateQuery) = useState do ""
+    setQuery : (Text ->{Flip} Text) ->{Update} ()
+    setQuery change = updateQuery change
+    result : (Recipe, Nat) ->{Render {Flip}} ()
+    result = cases
+      (recipe, index) ->
+        region index do
+          element "li" [class "result"] do
+            span [class "name"] do text (Recipe.name recipe)
+            span [class "kcal"] do text (toText (Recipe.kcal recipe) ++ " kcal")
+            button [class "add"] do text "Add"
+    onQuery : Text ->{Flip, Update} ()
+    onQuery value = setQuery (_ -> value)
+    queryListener : Modifier {Flip}
+    queryListener = Render.on "input" (Extractor.at "target" (Extractor.at "value" Extractor.text)) onQuery
+    el.div [attr.id "search"] do
+      results = List.indexed recipes |> List.filter (cases (recipe, _) -> Text.contains query (Recipe.name recipe))
+      voidElement "input" [attr.id "search-input", attribute "type" "search", queryListener]
+      element "p" [attr.id "search-note"] do
+        text ("Showing " ++ toText (List.size results) ++ " of " ++ toText (List.size recipes) ++ " for \"" ++ query ++ "\"")
+      element "ul" [attr.id "results"] do List.foreach result results

@@ -1,0 +1,507 @@
+{
+  "suite": "meals",
+  "iterations": 10,
+  "at": "2026-10-30T14:31:38.929Z",
+  "load": [
+    9.81,
+    11.85,
+    12.64
+  ],
+  "cpus": 24,
+  "chromium": "149.0.7827.114",
+  "interleaved": true,
+  "forcedGC": false,
+  "loadAtStart": [
+    10.6,
+    12.18,
+    12.77
+  ],
+  "results": {
+    "leptos": {
+      "load (ready)": {
+        "median": 24.7,
+        "min": 20,
+        "max": 51.9
+      },
+      "plan week dom": {
+        "median": 5.05,
+        "min": 4.3,
+        "max": 7.5
+      },
+      "plan week frame": {
+        "median": 21.3,
+        "min": 12.2,
+        "max": 27.9
+      },
+      "open tray dom": {
+        "median": 0.3,
+        "min": 0.2,
+        "max": 0.5
+      },
+      "open tray frame": {
+        "median": 10.35,
+        "min": 4.3,
+        "max": 26
+      },
+      "open macros dom": {
+        "median": 0.4,
+        "min": 0.2,
+        "max": 0.9
+      },
+      "open macros frame": {
+        "median": 13.8,
+        "min": 6,
+        "max": 15.7
+      },
+      "shuffle meal dom": {
+        "median": 2.25,
+        "min": 1.9,
+        "max": 3.4
+      },
+      "shuffle meal frame": {
+        "median": 19,
+        "min": 16.6,
+        "max": 20.9
+      },
+      "add serving dom": {
+        "median": 1.5,
+        "min": 1.2,
+        "max": 2.9
+      },
+      "add serving frame": {
+        "median": 13.5,
+        "min": 11.7,
+        "max": 19.5
+      },
+      "remove meal dom": {
+        "median": 1.65,
+        "min": 1.3,
+        "max": 5.6
+      },
+      "remove meal frame": {
+        "median": 17.6,
+        "min": 16.3,
+        "max": 20.4
+      },
+      "replan week dom": {
+        "median": 1.85,
+        "min": 1.3,
+        "max": 4.5
+      },
+      "replan week frame": {
+        "median": 16.5,
+        "min": 13.2,
+        "max": 29.3
+      },
+      "check item dom": {
+        "median": 0.6,
+        "min": 0.4,
+        "max": 1
+      },
+      "check item frame": {
+        "median": 13.65,
+        "min": 8.4,
+        "max": 19.1
+      },
+      "uncheck item dom": {
+        "median": 0.3,
+        "min": 0.2,
+        "max": 0.5
+      },
+      "uncheck item frame": {
+        "median": 15.65,
+        "min": 14.5,
+        "max": 17.3
+      },
+      "move day (FLIP) dom": {
+        "median": 2.25,
+        "min": 1.9,
+        "max": 3.3
+      },
+      "move day (FLIP) frame": {
+        "median": 18.85,
+        "min": 15.9,
+        "max": 28.6
+      },
+      "move day (FLIP) rAF script ms": {
+        "median": 4.7,
+        "min": 3.9,
+        "max": 10.2
+      },
+      "move day (FLIP) rAF callbacks": {
+        "median": 31,
+        "min": 31,
+        "max": 31
+      },
+      "move day (FLIP) rAF max ms": {
+        "median": 2.95,
+        "min": 2.8,
+        "max": 6.2
+      },
+      "move day (FLIP) elements moved": {
+        "median": 7,
+        "min": 7,
+        "max": 7
+      },
+      "type 7 keys dom": {
+        "median": 2.4,
+        "min": 2,
+        "max": 4.7
+      },
+      "type 7 keys frame": {
+        "median": 112.55,
+        "min": 110.4,
+        "max": 113.9
+      },
+      "clear search dom": {
+        "median": 2.25,
+        "min": 2,
+        "max": 2.5
+      },
+      "clear search frame": {
+        "median": 23.55,
+        "min": 23.2,
+        "max": 28.8
+      },
+      "wave dom": {
+        "median": 0.2,
+        "min": 0.1,
+        "max": 0.3
+      },
+      "wave frame": {
+        "median": 8.05,
+        "min": 3.9,
+        "max": 9.2
+      },
+      "dom nodes": {
+        "median": 1608,
+        "min": 1608,
+        "max": 1608
+      }
+    },
+    "warp-r7": {
+      "load (ready)": {
+        "median": 50.85,
+        "min": 39.4,
+        "max": 59.8
+      },
+      "plan week dom": {
+        "median": 11.6,
+        "min": 9.5,
+        "max": 13.6
+      },
+      "plan week frame": {
+        "median": 25.15,
+        "min": 19.9,
+        "max": 34.9
+      },
+      "open tray dom": {
+        "median": 0.85,
+        "min": 0.6,
+        "max": 1
+      },
+      "open tray frame": {
+        "median": 10.45,
+        "min": 3.9,
+        "max": 11.3
+      },
+      "open macros dom": {
+        "median": 0.6,
+        "min": 0.3,
+        "max": 1
+      },
+      "open macros frame": {
+        "median": 14.4,
+        "min": 12.5,
+        "max": 14.9
+      },
+      "shuffle meal dom": {
+        "median": 2.1,
+        "min": 1,
+        "max": 3.3
+      },
+      "shuffle meal frame": {
+        "median": 15.65,
+        "min": 14.3,
+        "max": 16.5
+      },
+      "add serving dom": {
+        "median": 1.2,
+        "min": 1,
+        "max": 1.5
+      },
+      "add serving frame": {
+        "median": 15.85,
+        "min": 15.2,
+        "max": 16.7
+      },
+      "remove meal dom": {
+        "median": 1.7,
+        "min": 1.2,
+        "max": 2.6
+      },
+      "remove meal frame": {
+        "median": 17.15,
+        "min": 16.1,
+        "max": 18.2
+      },
+      "replan week dom": {
+        "median": 5.15,
+        "min": 4.4,
+        "max": 6.1
+      },
+      "replan week frame": {
+        "median": 17.05,
+        "min": 15.4,
+        "max": 17.7
+      },
+      "check item dom": {
+        "median": 0.85,
+        "min": 0.5,
+        "max": 1.1
+      },
+      "check item frame": {
+        "median": 14.6,
+        "min": 14.1,
+        "max": 15.3
+      },
+      "uncheck item dom": {
+        "median": 0.95,
+        "min": 0.5,
+        "max": 1.3
+      },
+      "uncheck item frame": {
+        "median": 16.4,
+        "min": 15,
+        "max": 18.5
+      },
+      "move day (FLIP) dom": {
+        "median": 1.85,
+        "min": 1,
+        "max": 3.9
+      },
+      "move day (FLIP) frame": {
+        "median": 17.1,
+        "min": 12.9,
+        "max": 17.9
+      },
+      "move day (FLIP) rAF script ms": {
+        "median": 3.6,
+        "min": 2.4,
+        "max": 6.2
+      },
+      "move day (FLIP) rAF callbacks": {
+        "median": 31,
+        "min": 31,
+        "max": 31
+      },
+      "move day (FLIP) rAF max ms": {
+        "median": 1.25,
+        "min": 0.8,
+        "max": 2
+      },
+      "move day (FLIP) elements moved": {
+        "median": 7,
+        "min": 7,
+        "max": 7
+      },
+      "type 7 keys dom": {
+        "median": 7.25,
+        "min": 5.1,
+        "max": 8.7
+      },
+      "type 7 keys frame": {
+        "median": 112.85,
+        "min": 109.8,
+        "max": 114.1
+      },
+      "clear search dom": {
+        "median": 9.85,
+        "min": 8.5,
+        "max": 13.9
+      },
+      "clear search frame": {
+        "median": 22.5,
+        "min": 21.8,
+        "max": 25.8
+      },
+      "wave dom": {
+        "median": 0.45,
+        "min": 0.4,
+        "max": 0.9
+      },
+      "wave frame": {
+        "median": 8.8,
+        "min": 5.8,
+        "max": 10.4
+      },
+      "dom nodes": {
+        "median": 1613,
+        "min": 1613,
+        "max": 1613
+      }
+    },
+    "warp-r7s": {
+      "load (ready)": {
+        "median": 42.2,
+        "min": 36.4,
+        "max": 53.1
+      },
+      "plan week dom": {
+        "median": 10.65,
+        "min": 9.3,
+        "max": 13.9
+      },
+      "plan week frame": {
+        "median": 26.85,
+        "min": 20.8,
+        "max": 34.6
+      },
+      "open tray dom": {
+        "median": 0.6,
+        "min": 0.6,
+        "max": 0.9
+      },
+      "open tray frame": {
+        "median": 10.2,
+        "min": 9,
+        "max": 11.7
+      },
+      "open macros dom": {
+        "median": 0.45,
+        "min": 0.4,
+        "max": 0.6
+      },
+      "open macros frame": {
+        "median": 14.2,
+        "min": 13.4,
+        "max": 15.2
+      },
+      "shuffle meal dom": {
+        "median": 0.9,
+        "min": 0.7,
+        "max": 1.1
+      },
+      "shuffle meal frame": {
+        "median": 15.75,
+        "min": 15.1,
+        "max": 16.9
+      },
+      "add serving dom": {
+        "median": 0.8,
+        "min": 0.6,
+        "max": 1.4
+      },
+      "add serving frame": {
+        "median": 16.2,
+        "min": 14.9,
+        "max": 17.6
+      },
+      "remove meal dom": {
+        "median": 1.15,
+        "min": 1,
+        "max": 1.6
+      },
+      "remove meal frame": {
+        "median": 16.95,
+        "min": 15.7,
+        "max": 17.7
+      },
+      "replan week dom": {
+        "median": 4.85,
+        "min": 3.8,
+        "max": 7.6
+      },
+      "replan week frame": {
+        "median": 17.25,
+        "min": 16.9,
+        "max": 17.9
+      },
+      "check item dom": {
+        "median": 0.55,
+        "min": 0.3,
+        "max": 0.7
+      },
+      "check item frame": {
+        "median": 14.3,
+        "min": 13.1,
+        "max": 15.1
+      },
+      "uncheck item dom": {
+        "median": 0.6,
+        "min": 0.5,
+        "max": 0.9
+      },
+      "uncheck item frame": {
+        "median": 16,
+        "min": 14.9,
+        "max": 16.4
+      },
+      "move day (FLIP) dom": {
+        "median": 1.35,
+        "min": 1.1,
+        "max": 1.9
+      },
+      "move day (FLIP) frame": {
+        "median": 17,
+        "min": 16.5,
+        "max": 18
+      },
+      "move day (FLIP) rAF script ms": {
+        "median": 2.8,
+        "min": 2.1,
+        "max": 4.6
+      },
+      "move day (FLIP) rAF callbacks": {
+        "median": 31,
+        "min": 31,
+        "max": 31
+      },
+      "move day (FLIP) rAF max ms": {
+        "median": 1.05,
+        "min": 0.8,
+        "max": 1.3
+      },
+      "move day (FLIP) elements moved": {
+        "median": 7,
+        "min": 7,
+        "max": 7
+      },
+      "type 7 keys dom": {
+        "median": 6.65,
+        "min": 4.3,
+        "max": 11.7
+      },
+      "type 7 keys frame": {
+        "median": 113.3,
+        "min": 111.4,
+        "max": 114.1
+      },
+      "clear search dom": {
+        "median": 10.4,
+        "min": 9,
+        "max": 13.1
+      },
+      "clear search frame": {
+        "median": 22.7,
+        "min": 21.6,
+        "max": 25.8
+      },
+      "wave dom": {
+        "median": 0.4,
+        "min": 0.2,
+        "max": 0.7
+      },
+      "wave frame": {
+        "median": 9.5,
+        "min": 5.3,
+        "max": 10.4
+      },
+      "dom nodes": {
+        "median": 1613,
+        "min": 1613,
+        "max": 1613
+      }
+    }
+  }
+}
