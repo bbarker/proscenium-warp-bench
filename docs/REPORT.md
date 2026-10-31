@@ -20,21 +20,29 @@ repeat it.
 
   Leptos's release cost grows faster than its code does; warp's codegen grows about in
   line with it.
-- **The edit loop is a wash at 400 cards, and 3 to 7 times faster at 1,600.**
+- **With full rebuilds, the edit loop is a wash at 400 cards and about 2.5 times faster
+  at 1,600.**
   - **Leptos dev builds:** 6.8 s at 400 cards, 40 s at 1,600 (30 s rustc and 10 s of
     wasm-bindgen over a 200 MB module).
-  - **Unison:** a one-card edit takes 1.2–1.5 s to typecheck and 0.3–1.2 s to `update`,
+  - **Unison:** a one-card edit takes 1.2–1.7 s to typecheck and 0.3–1.2 s to `update`,
     and that hardly changes with app size. A full rebuild then takes 5 s at 400 cards in a
-    warm UCM session, and an estimated 10 s at 1,600; warp's own share of that is 2.4 s and
-    7.7 s.
-- **warp can cache codegen the way UCM caches typechecking, and that path is not wired
-  up yet.** `warp.incremental` emits only the terms the previous build lacked, by hash.
-  A one-card edit is a **20–39 ms** delta of 13–25 KB, at any app size. Using it in a dev
-  loop needs three pieces of glue: keep the build record between runs, build a
-  `CodeCache` base module, and have the page load deltas. With those, the loop would be
-  about 1.5 s of typechecking plus UCM's 2.5 s per `run`. One catch: `update` re-checks
-  every dependent of what changed. A leaf edit costs a second, but an edit to a widely
-  used definition costs about 60–100 ms for each definition that depends on it.
+    warm UCM session and 13 s at 1,600. warp's own share of that is 2.4–2.6 s and
+    7.7–8.9 s.
+- **With warp's codegen cache wired up, an edit reaches the running page in 3.4 s at
+  400 cards and 5.4 s at 1,600, and the page keeps its state**
+  ([The dev loop, wired up](#the-dev-loop-wired-up)). Leptos's dev build of the same edit
+  takes 7.5–10.6 s and 36–48 s, including a reload that loses the state.
+  - **The pieces.** `warp.incremental` emits only the terms the previous build lacked,
+    by hash. Three pieces of glue make it a dev loop: the build record kept on disk, a
+    `CodeCache` base module, and a page that loads each delta and renders it on the
+    same root. A warm build server beside UCM, holding warp and the record in memory,
+    takes the cost of a one-card edit in warp to 20–41 ms. The page applies it in 2–6 ms.
+  - **What is left is UCM's work.** Typechecking the edit takes 1.5–1.7 s and `update`
+    0.7–1.1 s. Starting the `run` that ships the code takes 0.9 s at 400 cards and 2.4 s
+    at 1,600, and a session's first `run` takes seconds to minutes.
+  - **One catch.** `update` re-checks every dependent of what changed, at about
+    60–100 ms each, so an edit to a widely used definition costs more than a leaf
+    edit's second.
 - **The shipped code is comparable in size.** After wasm-opt, warp's wasm is about half
   the size of Leptos's at every app size: 2.5 MB against 5.5 MB at 1,600 cards. Rust's
   monomorphised output compresses unusually well, though: brotli shrinks it to 178 KB,
@@ -158,13 +166,16 @@ repeat it.
     ([Text by code point](#text-by-code-point-a-differential-fuzz-and-a-bug-in-stock-warp)).
     It is fixed on `offer-3-text`.
   - **UCM 1.5.0:** applying a function read from a `Ref`, `(Ref.read r)()`, fails at `run`
-    or `compile` ([the repro](../unison/ucm-bugs/ref-read-applied.md)).
+    or `compile` ([the repro](../unison/ucm-bugs/ref-read-applied.md)). Two surprises
+    with `update` came up in [the dev loop](#the-dev-loop-wired-up):
+    - a `termLink` literal keeps naming the old term;
+    - editing a name whose term has other names leaves its dependents unchanged.
   - **Our harness:** until round 5, it counted the browser's layout and paint against
     some operations ([How the harness times](#how-the-harness-times)).
 - **A Leptos limit we may hit:** mounting the 1,600-card app, with 80 page components in
   one `view!`, overflowed wasm's default 1 MB stack in dev and release builds
-  (`memory access out of bounds`). An 8 MB stack fixed it. Nothing warns an app as it
-  approaches the limit.
+  (`memory access out of bounds`). So did the 400-card app in a dev build. An 8 MB stack
+  fixed both. Nothing warns an app as it approaches the limit.
 - **Recommendation:**
   - The build-time win is real, and it grows with app size.
   - Interactive screens no longer feel different from Leptos. On Proscenium as it is, an
@@ -249,8 +260,8 @@ Measured in one UCM session (`target/unison/frontend-bench/edit-loop.md`):
 
 | Step | 400 cards | 1,600 cards |
 | --- | --- | --- |
-| First `run` of the warp build entry in a fresh session | 30.7 s | not measured |
-| A warm `run` of the build entry | 5.0 s (warp: 2.1–2.4 s) | about 10 s, estimated (warp's 7.7 s plus the 2.5 s overhead) |
+| First `run` of the warp build entry in a fresh session | 30.7 s | 356–387 s (the `devloop` base entry, 2026-10-31) |
+| A warm `run` of the build entry | 5.0 s (warp: 2.1–2.4 s) | 13.3 s, measured 2026-10-31 on `devloop` (warp: 8.9 s) |
 | `load` of the one edited card (typecheck) | 1.2–1.5 s | 1.5 s |
 | `update` (card → page → UI → the build entries) | 0.26–0.85 s | 1.2 s |
 
@@ -289,7 +300,7 @@ Partly, and it could go further.
 - **`warp.incremental`** does what was hoped. Given the previous build's
   `BuildOutput`, it emits only the terms whose hashes the previous build did not have,
   and imports the rest from the base module. A one-card edit is 7 terms and 20–39 ms,
-  whatever the app's size. Three things stand between that and a working edit loop:
+  whatever the app's size. Three things stood between that and a working edit loop:
   1. The previous `EmitRecord` has to be kept between `run`s, which is a serialised
      value written to disk.
   2. The base module has to be built with `ReflectionSupport.CodeCache`, so it exports
@@ -298,12 +309,149 @@ Partly, and it could go further.
   3. The page has to load each delta with warp's `loadCompiledTerms` and render the UI
      again.
 
-  That is a few days' glue in a dev server rather than a research problem. Shipping
-  builds stay full builds, because closed-world optimisation needs one module.
-- **The remaining fixed cost is UCM's.** About 2.5 s goes to preparing each `run`, and
-  31 s to the first `run` in a session. A dev server that kept warp loaded and saw
-  codebase changes would need help from UCM. A warm runtime across runs would be the
-  feature request.
+  All three are now built, with a warm build server besides, and timed: see
+  [The dev loop, wired up](#the-dev-loop-wired-up). Shipping builds stay full builds,
+  because closed-world optimisation needs one module.
+- **The remaining fixed cost is UCM's.** Starting each `run` costs 0.8–3.4 s, more as the
+  app grows, and the first `run` of an entry in a session costs from seconds to minutes.
+  A warm build server takes warp's own start-up out of every edit without any help from
+  UCM, but not UCM's.
+
+### The dev loop, wired up
+
+Added 2026-10-31. The code is `bench.dev` on `@dfreeman/proscenium/devloop`, a branch of
+`perf-r7` (`unison/scratch/proscenium--devloop.u`). `bench/frontend-wasm/devloop.nu`
+times the UCM half and `devloop.mjs` the browser half.
+
+These are the three pieces of glue the previous section named, plus a fourth that the
+first timings called for:
+
+1. **The build record, kept between runs.** `bench.dev.writeRecord` writes warp's
+   `EmitRecord` to disk with `Value.serialize 5`, and `readRecord` loads it in the next
+   process. It is 178 KB at 400 cards and 573 KB at 1,600. It reads in 30 ms (110 ms at
+   1,600) and writes in 6–25 ms.
+2. **A `CodeCache` base.** `bench.dev.config` runs warp with no optimizer and with
+   `CodeCache`, so the base module keeps a table of its terms by hash for a delta to
+   link against. It holds 3,103 terms at 400 cards, against 2,884 for the
+   `NoReflection` build (10,423 against 10,204 at 1,600). warp builds it in 2.9–4.1 s
+   (8.0–8.9 s at 1,600).
+3. **A page that loads deltas.** `bench.dev.client` renders the UI on a `Root`, then
+   waits on `host.next()` for each edit. For each one, it:
+   - calls `loadCompiledTerms` on the delta;
+   - calls `loadValue` on the UI's bytes, which UCM serialised;
+   - calls `Root.render` on the same root.
+
+   ink reconciles the new UI against the old, so any state the edit does not touch
+   survives. In every iteration, card 3 was opened before the first edit, and after
+   the fifth it was still open with its count.
+4. **A warm build server.** In the first version, each edit is a UCM `run` of
+   `bench.dev.delta`, which is a fresh process. That process spent 0.3–0.6 s in warp,
+   against the 20–39 ms measured in one process. warp's start-up is paid again on
+   every `run`, even when the delta is empty.
+   - **The server.** `bench.dev.server` is a compiled entry, run with
+     `ucm run.compiled` beside UCM, that keeps warp and the record in memory.
+   - **The push.** After an edit, a UCM `run` of `bench.dev.push` walks the UI's code
+     with `Code.lookup` and stops at the terms the server already holds (`known.bin`).
+     It ships the rest with `Code.serialize`, together with the UI as a serialised
+     value.
+   - **The delta.** The server caches the code with `Code.cache_`, loads the UI and
+     builds the delta.
+   - **The size.** A one-card edit ships 7 terms in 6 KB.
+
+#### What an edit costs
+
+Each run is one card's paragraph edited five times in a row. Each edit is a `load` of
+the card, an `update` and a build. The table gives the medians of edits 2–5, since the
+first edit's build carries the session's first `run` of its entry. Every UCM step is
+timed between `run`s of a stamp entry, less the stamp's own cost of 0.2–0.3 s.
+
+The runs, all on 2026-10-31:
+- **400 cards, a `run` per edit:** load 7.
+- **400 cards, the warm server:** load 5.
+- **1,600 cards, a `run` per edit:** load 27, falling to 6.
+- **1,600 cards, the warm server:** load 6.
+- **The page timings:** medians of 10 fresh pages, at load 23–26 for 400 cards and
+  14–21 for 1,600.
+- **The Leptos rows:** dev builds of an edit to a card and back, with an 8 MiB stack,
+  at load 8–15 for 400 cards and 18–20 for 1,600.
+
+The UCM results are in `results/devloop-builds.jsonl` and the page timings in
+`results/devloop.jsonl`. The Leptos builds are in `results/builds.jsonl`.
+
+| Step | Leptos dev | warp, a `run` per edit | warp, warm server |
+| --- | --- | --- | --- |
+| **400 cards** | | | |
+| typecheck the edit (`load`) | | 1.46 s | 1.74 s |
+| `update` | | 0.69 s | 0.76 s |
+| build | 6.6–9.7 s (compile 3.9–6.8, bindgen 2.7–2.9) | 2.23 s (inside the process 0.3–0.6 s) | 0.91 s (inside 34–39 ms; warp 20–22 ms) |
+| page | reload 0.91 s, state lost | 2–6 ms, state kept | 2–6 ms, state kept |
+| **edit to page** | **7.5–10.6 s** | **4.4 s** | **3.4 s** |
+| **1,600 cards** | | | |
+| typecheck the edit (`load`) | | 1.59 s | 1.68 s |
+| `update` | | 0.72 s | 1.14 s |
+| build | 29.5–41.1 s (compile 19.5–28.1, bindgen 10.0–13.0) | 3.85 s (inside 0.43–0.80 s) | 2.36 s (inside 73–275 ms; warp 39–41 ms) |
+| page | reload 6.4 s, state lost | 2–4 ms, state kept | 2–4 ms, state kept |
+| **edit to page** | **36–48 s** | **6.0 s** | **5.4 s** |
+
+For comparison, a full rebuild of the edited app in the same UCM session takes 4.9 s at
+400 cards and 13.3 s at 1,600, of which warp's share is 2.6 s and 8.9 s. The page then
+has to reload, which loses its state: the `CodeCache` base takes 0.19 s to load at 400
+cards and 0.29 s at 1,600.
+
+What the table shows:
+
+- **warp is no longer the cost of an edit.** In a warm server, warp's share is 20–41 ms
+  at either size. A delta is 13 KB at 400 cards and 25 KB at 1,600, since the UI's own
+  term lists 20 or 80 pages. The page applies it in 2–6 ms.
+- **UCM's per-`run` start-up is the largest step, and it grows with the app.** A `run`
+  of an entry that does almost nothing costs 0.2–0.3 s. A `run` whose entry reaches the
+  whole UI costs about 0.9 s more at 400 cards and 2.1–2.3 s more at 1,600, even when
+  no code has changed. Its work inside the process is 34–275 ms. A `run` that also
+  reaches warp's emitter costs about 1.8 s more at 400 cards and 3.4 s at 1,600.
+- **A session's first `run` is far worse, and it grows faster than the app does.** The
+  first push took 4.1–8.1 s at 400 cards and 205–246 s at 1,600. The first `run` of the
+  base, which also loads warp, took 35–48 s at 400 cards and 356–387 s at 1,600. The
+  compiled server avoids this cost: `ucm run.compiled` of its 89 MB `.uc` started and
+  built the 1,600-card base in 17–20 s, of which warp's share was 8.0–9.2 s. The cost
+  was paid once, when `compile` wrote the file.
+- **Typechecking and `update` stay at 1.4–2.0 s and 0.7–1.3 s.** That is UCM's work on a
+  20-line card. It hardly changes from 400 cards to 1,600.
+
+So the dev loop works: an edit reaches the running page in 3.4 s at 400 cards and 5.4 s
+at 1,600, and the page keeps its state. Leptos's dev build takes 7.5–10.6 s and
+36–48 s, and the reload loses the state. Most of what is left is UCM's per-`run`
+start-up and its typechecking. The next feature request for UCM is a `run` that does
+not re-prepare an unchanged closure. A dev server could also keep a UCM session of its
+own: it would `load` and `update` the edited file, then `run` the push. That would
+spare the developer the typing, but not the time.
+
+Things learned on the way:
+- **UCM 1.5's `update` does not carry a `termLink` literal forward.** A push that took
+  the UI by link, as `bench.dev.push (termLink ui)`, would load none of the UI's code.
+  After an `update`, though, the link still named the old UI, by a bare hash. A value
+  built from a link through `unison_internal`'s encoder also cost 0.8–1.2 s per `run`.
+  That is more than loading the UI. The link version is folded at the foot of the
+  scratch file.
+- **`update` of a name whose term has other names leaves its dependents alone.** The
+  generated cards are alike, so the 1,600-card app's cards 0–99 are the same terms as
+  the 25- and 100-card apps'. Editing card 7 changed `s1600.card7`, but not
+  `s1600.page0` or `s1600.ui`, and the delta came out empty. The 1,600-card runs
+  therefore edit cards 407 and up. The 400-card app's cards have names of their own.
+- **A Leptos dev build of the 400-card app does not mount** with wasm's default 1 MB
+  stack (`memory access out of bounds`). A release build of the same app does. The
+  Leptos dev rows above use an 8 MiB stack (`bench.nu leptos --stack-mb 8`). The
+  summary's note on Leptos's stack limit now names this case too.
+
+#### What the loop still lacks
+
+- **A dev server process.** Here a transcript plays the developer and Playwright plays
+  the page. A tool would watch the scratch file, drive UCM, and send each delta to the
+  page over a socket. That is glue, and every piece it needs is built here.
+- **A reload of the page** has to load the base and then every delta in order, or ask
+  for a fresh base. The record and the deltas are all on disk, so either works.
+- **An edit to a widely used definition** still costs UCM about 60–100 ms for each
+  dependent during `update`. warp's share stays the same, apart from re-emitting the
+  dependents whose hashes changed.
 
 ## Code size
 
@@ -2406,18 +2554,13 @@ boundary (round 7).
 4. **ink: an index of children by segment** in each record, so that delivering a message
    costs `O(log n)` instead of a walk of all the siblings. This is for update every 10th
    and select, and is superseded if Proscenium stops using ink.
-5. **The dev loop.** Build a `CodeCache` base module that exposes an async `hotSwap`,
-   then on every edit:
-   1. On the host, build a delta with `warp.incremental`, from the build record kept on
-      disk between runs.
-   2. Serialise the new UI value.
-   3. In the page, `loadCompiledTerms` the delta, `loadValue` the UI, and call
-      `Root.render`.
-
-   The pieces are all measured. A one-card delta takes 20–39 ms and is 10–25 KB; an
-   edit's typecheck and `update` take about 1.5 s plus 0.3–1.2 s; UCM adds 2.5 s per
-   `run`. That puts edit-to-page at about 4–5 s, whatever the app's size, against 7 s
-   at 400 cards and 40 s at 1,600 for a Leptos dev build.
+5. **The dev loop: built on 2026-10-31**
+   ([The dev loop, wired up](#the-dev-loop-wired-up)). An edit reaches the page in
+   3.4 s at 400 cards and 5.4 s at 1,600, keeping state. The prediction here was 4–5 s
+   at any size. What remains:
+   - a dev server process to replace the transcript and Playwright;
+   - from UCM, a `run` that does not re-prepare an unchanged closure. That takes
+     0.9–2.3 s of every edit, and minutes on a session's first `run` at 1,600 cards.
 
 ## Where things are
 
@@ -2442,6 +2585,11 @@ boundary (round 7).
     allocations, indirect calls, runtime helpers) and summarise them.
   - `totext.mjs`: times a builtin's implementations against each other in Node
     (`Nat.toText`: JS, unboxed JS, Unison, instruction DSL).
+  - `devloop.nu` and `devloop.mjs`: the dev loop's UCM half (edits, transcripts, the
+    warm server) and its browser half, with results in `results/devloop-builds.jsonl`
+    and `results/devloop.jsonl`. The first two 1,600-card runs in
+    `devloop-builds.jsonl` (10:43 and 10:47) edited shared cards and built empty deltas.
+    They are kept only for their first-`run` timings.
 - `docs/TailResumptive.md`: the design note for compiling a handler that resumes once, at
   the end, as a direct call, with the shapes detected and the ceiling measured.
 - `bench/handler-cost/`: `run.mjs` times warp `handler-cost`'s million operations in
@@ -2489,6 +2637,8 @@ boundary (round 7).
     - Proscenium `perf-r7`, `bench-jfb`, `perf-r7-142`, `perf-r7-guard`, the floor
       `perf-r7-mini` (`bench.mini`), the prototype `perf-r7-tree` (`bench.tree`) and the
       signals core `perf-r7-signals` (`bench.sig`).
+  - on 2026-10-31, Proscenium `devloop` (`bench.dev`, on `perf-r7`, with the 1,600-card
+    app as `bench.cards.s1600`).
 
     The README's branch tables say what each holds.
 
@@ -2536,6 +2686,15 @@ BENCH_COUNT=1 BENCH_VARIANTS=r5iraw,r5iopt BENCH_IMPLS=warp-r5iraw,warp-r5iopt n
 mv bench/frontend-wasm/results/boundary-rows.json bench/frontend-wasm/results/sites-rows.json
 nu bench/frontend-wasm/sites.nu rows
 nu bench/frontend-wasm/sites.nu rows --by-function --operation "create 1k" --top 20
+# The dev loop (2026-10-31; the devloop branch and its compiled servers, see docs/UnisonSteps.md)
+nu bench/frontend-wasm/devloop.nu run 400 --ns bench.cards.s400i
+nu bench/frontend-wasm/devloop.nu warm 400 --ns bench.cards.s400i
+nu bench/frontend-wasm/devloop.nu run 1600 --first 407
+nu bench/frontend-wasm/devloop.nu warm 1600 --first 407
+nu bench/frontend-wasm/devloop.nu page 400 warm --ns bench.cards.s400i    # and run; 1600 with --first 407
+nu bench/frontend-wasm/gen-cards.nu 400 --edit                            # then back without --edit
+nu bench/frontend-wasm/bench.nu leptos cards --dev --name cards-400 --stack-mb 8
+node bench/frontend-wasm/devloop.mjs leptos/cards-400-dev 10              # the reload a Leptos edit needs
 ```
 
 The round 5 build entries were compiled in the bench codebase with

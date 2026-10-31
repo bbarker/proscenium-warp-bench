@@ -422,6 +422,37 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/proscenium/perf-r7-signals> compile bench.sig.meals.build target/unison/frontend-bench/meals-build-sig2
 ```
 
+- [ ] The dev loop (`bench.dev`): warp's codegen cache wired to a page that takes deltas,
+      both as a UCM `run` per edit and as a warm build server, on a branch of `perf-r7`
+      with the 1,600-card app loaded too. First `nu bench/frontend-wasm/gen-cards.nu 1600`
+      and `nu bench/frontend-wasm/devloop.nu split 1600`, which writes the app in six
+      parts (four of 400 cards, then the rest; UCM peaks at about 10 GB on each):
+
+```ucm
+@dfreeman/proscenium/perf-r7> branch /devloop
+@dfreeman/proscenium/devloop> load target/unison/frontend-bench/cards-1600-part1.u
+@dfreeman/proscenium/devloop> update
+@dfreeman/proscenium/devloop> load target/unison/frontend-bench/cards-1600-part2.u
+@dfreeman/proscenium/devloop> update
+@dfreeman/proscenium/devloop> load target/unison/frontend-bench/cards-1600-part3.u
+@dfreeman/proscenium/devloop> update
+@dfreeman/proscenium/devloop> load target/unison/frontend-bench/cards-1600-part4.u
+@dfreeman/proscenium/devloop> update
+@dfreeman/proscenium/devloop> load target/unison/frontend-bench/cards-1600-part5.u
+@dfreeman/proscenium/devloop> update
+@dfreeman/proscenium/devloop> load target/unison/frontend-bench/cards-1600-part6.u
+@dfreeman/proscenium/devloop> update
+@dfreeman/proscenium/devloop> load unison/scratch/proscenium--devloop.u
+@dfreeman/proscenium/devloop> update
+@dfreeman/proscenium/devloop> compile bench.cards.s400i.dev.server target/unison/frontend-bench/cards-400-devserver
+@dfreeman/proscenium/devloop> compile bench.cards.s1600.dev.server target/unison/frontend-bench/cards-1600-devserver
+```
+
+      The loops run in forks of the codebase, so the edits never reach the branch:
+      `nu bench/frontend-wasm/devloop.nu run 400 --ns bench.cards.s400i`, `warm 400 --ns
+      bench.cards.s400i`, `run 1600 --first 407` and `warm 1600 --first 407`, then `page`
+      with the same arguments for the browser half.
+
 - [ ] The two library offers that stand alone: ink's ordering fix on 2.0.1 (`perf`'s first
       step, `#7tptpse51l`, plus its regression tests and release notes), and Proscenium's
       `Keyed` and `Selector` on 0.4.3 (`main`):

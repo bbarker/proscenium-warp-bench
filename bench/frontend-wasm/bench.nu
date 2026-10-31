@@ -90,7 +90,9 @@ def "main leptos" [
     --touch       # touch the crate's source first, so its own compile is timed
     --label: string = ""  # a note kept with the result (e.g. "edit", "cards-200")
     --name: string        # the output directory's name (default: the app); cards-<count> for the scaling app
+    --stack-mb: int = 0   # the wasm stack in MiB (0: the linker's default), which a dev build of 400 cards needs to mount
 ] {
+    let rustflags = if $stack_mb > 0 { $"-C link-arg=-zstack-size=($stack_mb * 1024 * 1024)" } else { "" }
     let crate = $"bench-($app)"
     let profile = if $dev { "dev" } else { "release" }
     let profile_dir = if $dev { "debug" } else { "release" }
@@ -100,7 +102,7 @@ def "main leptos" [
     let compile = timed {
         run-or-fail "cargo build" {
             cd $workspace
-            with-env { RUSTC_WRAPPER: $wrapper, RUSTFLAGS: "", CARGO_TARGET_DIR: (cargo-target) } {
+            with-env { RUSTC_WRAPPER: $wrapper, RUSTFLAGS: $rustflags, CARGO_TARGET_DIR: (cargo-target) } {
                 ^cargo build --profile $profile --target wasm32-unknown-unknown -p $crate
             }
         }

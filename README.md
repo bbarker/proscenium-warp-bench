@@ -12,6 +12,9 @@ a line on each round, and each round's section has the details.
 
 - **Build time:** release builds are 10–25 times faster than Leptos's, and the gap grows
   with app size.
+- **Edit loop:** with warp's codegen cache wired up, an edit reaches the running page in
+  3.4 s at 400 cards and 5.4 s at 1,600, and the page keeps its state. Leptos's dev builds
+  take 7.5–10.6 s and 36–48 s, with a reload. Most of what is left is UCM's work.
 - **Size:** about half of Leptos's raw wasm, but larger under brotli on repetitive code.
 - **Runtime:** rounds of changes to ink, warp and Proscenium took a js-framework-benchmark
   table from 50–300 times Leptos's time to 1.4–7 times. A minimal signals library on the
@@ -100,6 +103,7 @@ Each branch is built on the one before it, and carries the ink and warp versions
 | [`perf-r7-tree`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7-tree) | `perf-r7-mini` + `bench.tree`, a first prototype of a tree of Proscenium's own behind its `Render` API: one handler, cells by path, a memo per element. `bench.rows.ui` runs on it unchanged, 32–39% faster than on ink for creating rows, and so does round 7's fine-grained `bench.rowsfg.ui` with its provider, `Keyed` and `Selector`: faster than on ink in every operation but append (5% slower). The 400-card page, the meals page and the js-framework-benchmark app run on it too. | round 7 |
 | [`perf-r7-signals`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7-signals) | `perf-r7-tree` + `bench.sig`, a minimal signals core in Leptos's model, with the rows app on it (the reactive context passed explicitly, and carried by an ability) and the meals page. At about Leptos's speed on the rows suite with a fifth of the tree's heap, and a meal's edit is the fastest of the four builds (`docs/Signals.md`). | round 7 |
 | [`perf-r7-mini`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7-mini) | `perf-r7` + `bench.mini`, a keyed virtual DOM with no ink and no Proscenium, with the rows app as data and through an `Html` ability with one handler: the floor for a tree without ink. | round 7 |
+| [`devloop`](https://share.unison-lang.org/@nusentry/proscenium/code/devloop) | `perf-r7` + `bench.dev`, warp's codegen cache wired to a running page, with the 1,600-card app (`bench.cards.s1600`). The pieces are a `CodeCache` base, the build record kept on disk, a page that loads each delta and renders it on the same root (keeping state), and a warm build server that UCM pushes new code to. An edit reaches the page in 3.4 s at 400 cards and 5.4 s at 1,600 (`docs/REPORT.md`, "The dev loop, wired up"). | dev loop |
 
 ## Reproducing
 

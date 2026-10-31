@@ -56,4 +56,5 @@ The first three lines push each project's `main`, which Share needs before a pro
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r7-tree @dfreeman/proscenium/perf-r7-tree
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r7-signals @dfreeman/proscenium/perf-r7-signals
 @dfreeman/proscenium/bench> push @nusentry/proscenium/perf-r7-guard @dfreeman/proscenium/perf-r7-guard
+@dfreeman/proscenium/bench> push @nusentry/proscenium/devloop @dfreeman/proscenium/devloop
 ```

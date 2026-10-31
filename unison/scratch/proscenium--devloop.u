@@ -1,0 +1,284 @@
+{{ The dev loop's build configuration: no optimizer and no debug names, with {CodeCache}, so that the base module keeps a table of its terms by hash for a delta to link against. }}
+bench.dev.config : BuildConfig
+bench.dev.config = BuildConfig [] CodeCache false false
+
+{{
+The page half of the dev loop. Renders `ui` on the page's body, then waits on `host.next()` for each edit: a JS object holding a delta module (`delta`, written by {bench.dev.delta}) and the edited UI as a serialised value (`ui`). It loads the delta's terms, loads the UI, renders it on the same root, and calls `host.applied()`. If the UI names a term that no loaded module holds, it calls `host.failed()` and keeps the page as it was.
+}}
+bench.dev.client : '{Render {}} () -> JSValue ->{Exception, JS, Async} ()
+bench.dev.client ui host =
+  root = Root.create (global "document" :: "body") Provider.none
+  Root.render root ui
+  next _ =
+    edit = JSValue.await (host :: "next" :$ [])
+    loadCompiledTerms (asBytes! (edit :: "delta"))
+    match loadValue (Value.deserialize (asBytes! (edit :: "ui"))) with
+      Right edited ->
+        Root.render root edited
+        host :: "applied" :$> []
+      Left _ -> host :: "failed" :$> []
+    next ()
+  next ()
+
+{{ Writes `record` to `record.bin` in `dir` as a serialised value, so that the next {bench.dev.delta}, in a later process, can start from it. }}
+bench.dev.writeRecord : FilePath -> EmitRecord ->{IO, Exception} Nat
+bench.dev.writeRecord dir record =
+  use FilePath /
+  bytes = Value.serialize 5 (Value.value record)
+  writeFile (dir / "record.bin") bytes
+  Bytes.size bytes
+
+{{ Reads the build record {bench.dev.writeRecord} wrote to `dir`. }}
+bench.dev.readRecord : FilePath ->{IO, Exception} EmitRecord
+bench.dev.readRecord dir =
+  use FilePath /
+  match Value.load (Value.deserialize (FilePath.readFile (dir / "record.bin"))) with
+    Right record -> record
+    Left missing -> raiseGeneric "the build record names terms this codebase lacks" missing
+
+{{ Milliseconds from `from` to `to`, as JSON text. }}
+bench.dev.millis : Duration -> Duration -> Text
+bench.dev.millis from to = Float.toText (asMilliseconds (to Duration.- from))
+
+{{ The phase marks {bench.build.withPhaseTimes} returns, as the members of a JSON object: each mark's milliseconds since the first. }}
+bench.dev.phases : [(Text, Duration)] -> Text
+bench.dev.phases marks =
+  use Text ++
+  start = List.head marks |> Optional.map at2 |> Optional.getOrElse Duration.zero
+  phase = cases (label, at) -> "\"" ++ label ++ "\":" ++ millis start at
+  Text.join "," (List.map phase marks)
+
+{{
+`run <entry> <outDir>` for an entry made with this: the dev loop's first build. A {CodeCache} build of {bench.dev.client} on `ui`, written as `base.wasm` and `base.loader.js` with its phases printed as {bench.build.report} prints them, then the build record, written to `record.bin` for {bench.dev.delta}, on a second JSON line with the time and bytes it took.
+}}
+bench.dev.base : '{Render {}} () -> '{IO, Exception} ()
+bench.dev.base ui = do
+  use Text ++
+  match getArgs() with
+    [outDir] ->
+      dir = FilePath outDir
+      result = withPhaseTimes do warp.withProgressEvents config do exposeAsyncFunction_ "main" (client ui)
+      (output, _, _) = result
+      report "base" dir result
+      started = Clock.monotonic()
+      size = writeRecord dir (emitRecord output)
+      printLine ("{\"record\":\"base\",\"write_ms\":" ++ millis started Clock.monotonic() ++ ",\"record_bytes\":" ++ Nat.toText size ++ "}")
+    _ -> printLine "usage: <entry> <outDir>"
+
+{{
+`run <entry> <outDir> <step>` for an entry made with this: one edit's build, in a process of its own. Reads the build record from `outDir`, emits only the terms `ui` needs that no earlier build emitted, and writes them as `delta-<step>.wasm`, `ui` as a serialised value as `ui-<step>.bin`, and the grown record back to `record.bin`. Prints one JSON line: the milliseconds spent reading the record, in warp, writing the delta and the UI, and writing the record, the terms emitted, and the three files' sizes.
+}}
+bench.dev.delta : '{Render {}} () -> '{IO, Exception} ()
+bench.dev.delta ui = do
+  use FilePath /
+  use Text ++
+  match getArgs() with
+    [outDir, step] ->
+      dir = FilePath outDir
+      started = Clock.monotonic()
+      record = readRecord dir
+      recordRead = Clock.monotonic()
+      previous = BuildOutput Bytes.empty Bytes.empty record
+      (output, marks, emitted) =
+        withPhaseTimes do
+          incremental.withProgressEvents previous do
+            _ = emitValue "ui" (lib.dfreeman_warp_r7f.lib.unison_internal_0_0_25.runtime.value ui)
+            ()
+      built = Clock.monotonic()
+      deltaBytes = moduleBytes output
+      uiBytes = serialize_v4 (Value.value ui)
+      writeFile (dir / ("delta-" ++ step ++ ".wasm")) deltaBytes
+      writeFile (dir / ("ui-" ++ step ++ ".bin")) uiBytes
+      written = Clock.monotonic()
+      recordSize = writeRecord dir (emitRecord output)
+      done = Clock.monotonic()
+      printLine
+        ("{\"build\":\"delta-" ++ step ++ "\",\"emitted\":" ++ Nat.toText emitted
+          ++ ",\"read_ms\":" ++ millis started recordRead
+          ++ ",\"warp_ms\":" ++ millis recordRead built
+          ++ ",\"write_ms\":" ++ millis built written
+          ++ ",\"record_ms\":" ++ millis written done
+          ++ ",\"total_ms\":" ++ millis started done
+          ++ ",\"delta_bytes\":" ++ Nat.toText (Bytes.size deltaBytes)
+          ++ ",\"ui_bytes\":" ++ Nat.toText (Bytes.size uiBytes)
+          ++ ",\"record_bytes\":" ++ Nat.toText recordSize
+          ++ ",\"phases\":{" ++ phases marks ++ "}}")
+    _ -> printLine "usage: <entry> <outDir> <step>"
+
+bench.cards.s400i.dev.base : '{IO, Exception} ()
+bench.cards.s400i.dev.base = bench.dev.base bench.cards.s400i.ui
+
+bench.cards.s400i.dev.delta : '{IO, Exception} ()
+bench.cards.s400i.dev.delta = bench.dev.delta bench.cards.s400i.ui
+
+{{ Every term link `ui` reaches through code that {Code.lookup} finds, `ui`'s own included: in a compiled {bench.dev.server}, the terms it already holds. }}
+bench.dev.reach : '{Render {}} () ->{IO, Exception} [Link.Term]
+bench.dev.reach ui = Set.toList (bench.dev.walk Set.empty (Value.dependencies (Value.value ui)) [] |> at1)
+
+{{ Walks the code of `pending` and everything it reaches, skipping links in `seen`. Returns the links walked, in `seen`, and each walked term's link with its serialised code. A link {Code.lookup} does not find, a builtin's, is marked seen and has no code. }}
+bench.dev.walk : Set Link.Term -> [Link.Term] -> [(Link.Term, Bytes)] ->{IO, Exception} (Set Link.Term, [(Link.Term, Bytes)])
+bench.dev.walk seen pending found =
+  use List ++
+  match pending with
+    [] -> (seen, found)
+    link +: rest | Set.contains link seen -> bench.dev.walk seen rest found
+    link +: rest ->
+      match Code.lookup link with
+        None -> bench.dev.walk (Set.insert link seen) rest found
+        Some code -> bench.dev.walk (Set.insert link seen) (Code.dependencies code ++ rest) (found :+ (link, Code.serialize 4 code))
+
+{{ Waits for `file` to exist, looking every millisecond. }}
+bench.dev.waitFor : FilePath ->{IO, Exception} ()
+bench.dev.waitFor file =
+  if FilePath.exists file then () else
+    sleepMicroseconds 1000
+    bench.dev.waitFor file
+
+{{ Writes `bytes` to `file` through a temporary file and a rename, so that whoever waits on `file` never reads it half written. }}
+bench.dev.writeAtomically : FilePath -> Bytes ->{IO, Exception} ()
+bench.dev.writeAtomically file bytes =
+  use Text ++
+  (FilePath path) = file
+  temporary = FilePath (path ++ ".partial")
+  writeFile temporary bytes
+  FilePath.renameFile temporary file
+
+{{
+`run <entry> <outDir> <step>` for an entry made with this, in UCM after an edit: the dev loop's edit for a warm {bench.dev.server} that is watching `outDir`. Ships `push-<step>.bin`: the code of every term `ui` reaches that `known.bin` does not list, and `ui` as a serialised value. Adds the shipped links to `known.bin`, waits for the server's `done-<step>.json`, and prints one JSON line: its own milliseconds (walking the code, writing the push) with the push's size, and the server's line.
+}}
+bench.dev.push : '{Render {}} () -> '{IO, Exception} ()
+bench.dev.push ui = do
+  use FilePath /
+  use Text ++
+  match getArgs() with
+    [outDir, step] ->
+      dir = FilePath outDir
+      started = Clock.monotonic()
+      known = match Value.load (Value.deserialize (FilePath.readFile (dir / "known.bin"))) with
+        Right links -> links
+        Left missing -> raiseGeneric "known.bin names terms this codebase lacks" missing
+      (seen, code) = bench.dev.walk (Set.fromList known) (Value.dependencies (Value.value ui)) []
+      walked = Clock.monotonic()
+      uiBytes = serialize_v4 (Value.value ui)
+      payload = serialize_v4 (Value.value (code, uiBytes))
+      writeAtomically (dir / ("push-" ++ step ++ ".bin")) payload
+      writeFile (dir / "known.bin") (serialize_v4 (Value.value (Set.toList seen)))
+      pushed = Clock.monotonic()
+      done = dir / ("done-" ++ step ++ ".json")
+      waitFor done
+      finished = Clock.monotonic()
+      printLine
+        ("{\"push\":\"" ++ step ++ "\",\"terms\":" ++ Nat.toText (List.size code)
+          ++ ",\"walk_ms\":" ++ millis started walked
+          ++ ",\"write_ms\":" ++ millis walked pushed
+          ++ ",\"wait_ms\":" ++ millis pushed finished
+          ++ ",\"total_ms\":" ++ millis started finished
+          ++ ",\"push_bytes\":" ++ Nat.toText (Bytes.size payload)
+          ++ ",\"server\":" ++ FilePath.readFileUtf8 done ++ "}")
+    _ -> printLine "usage: <entry> <outDir> <step>"
+
+{{
+`ucm run.compiled <entry>.uc -- <outDir>` for a compiled entry made with this: the dev loop's warm build server. Builds the base as {bench.dev.base} does and writes `known.bin`, the terms it holds, and then `ready.json`, the base build's timings. It then keeps warp and the build record in memory and serves edits: for step 1, 2, ... it waits for `push-<step>.bin` from {bench.dev.push}, caches the pushed code, loads the UI, and writes `delta-<step>.wasm`, `ui-<step>.bin`, the grown `record.bin` and, last, `done-<step>.json` with its timings.
+}}
+bench.dev.server : '{Render {}} () -> '{IO, Exception} ()
+bench.dev.server ui = do
+  use FilePath /
+  use Text ++
+  match getArgs() with
+    [outDir] ->
+      dir = FilePath outDir
+      result = withPhaseTimes do warp.withProgressEvents config do exposeAsyncFunction_ "main" (client ui)
+      (output, marks, emitted) = result
+      report "base" dir result
+      started = Clock.monotonic()
+      size = writeRecord dir (emitRecord output)
+      recorded = Clock.monotonic()
+      known = reach ui
+      writeAtomically (dir / "known.bin") (serialize_v4 (Value.value known))
+      ready =
+        "{\"server\":\"ready\",\"emitted\":" ++ Nat.toText emitted
+          ++ ",\"record_ms\":" ++ millis started recorded ++ ",\"record_bytes\":" ++ Nat.toText size
+          ++ ",\"known\":" ++ Nat.toText (List.size known) ++ ",\"known_ms\":" ++ millis recorded Clock.monotonic()
+          ++ ",\"phases\":{" ++ phases marks ++ "}}"
+      writeAtomically (dir / "ready.json") (Text.toUtf8 ready)
+      printLine ready
+      bench.dev.serve dir output 1
+    _ -> printLine "usage: <entry> <outDir>"
+
+{{ {bench.dev.server}'s loop from `step` on, with `output` the build so far. }}
+bench.dev.serve : FilePath -> BuildOutput -> Nat ->{IO, Exception} ()
+bench.dev.serve dir output step =
+  use FilePath /
+  use Text ++
+  name = Nat.toText step
+  waitFor (dir / ("push-" ++ name ++ ".bin"))
+  started = Clock.monotonic()
+  (code, uiBytes) = match Value.load (Value.deserialize (FilePath.readFile (dir / ("push-" ++ name ++ ".bin")))) with
+    Right pushed -> pushed
+    Left missing -> raiseGeneric "a push named code it did not carry" missing
+  decode = cases (link, bytes) -> (link, Code.deserialize bytes)
+  _ = Code.cache_ (List.map decode code)
+  ui = match Value.load (Value.deserialize uiBytes) with
+    Right loaded -> loaded
+    Left missing -> raiseGeneric "the pushed UI needs terms the push did not carry" missing
+  loaded = Clock.monotonic()
+  (output', marks, emitted) =
+    withPhaseTimes do
+      incremental.withProgressEvents output do
+        _ = emitValue "ui" (lib.dfreeman_warp_r7f.lib.unison_internal_0_0_25.runtime.value ui)
+        ()
+  built = Clock.monotonic()
+  deltaBytes = moduleBytes output'
+  writeFile (dir / ("delta-" ++ name ++ ".wasm")) deltaBytes
+  writeFile (dir / ("ui-" ++ name ++ ".bin")) uiBytes
+  written = Clock.monotonic()
+  recordSize = writeRecord dir (emitRecord output')
+  done = Clock.monotonic()
+  line =
+    "{\"step\":" ++ name ++ ",\"emitted\":" ++ Nat.toText emitted
+      ++ ",\"load_ms\":" ++ millis started loaded
+      ++ ",\"warp_ms\":" ++ millis loaded built
+      ++ ",\"write_ms\":" ++ millis built written
+      ++ ",\"record_ms\":" ++ millis written done
+      ++ ",\"total_ms\":" ++ millis started done
+      ++ ",\"delta_bytes\":" ++ Nat.toText (Bytes.size deltaBytes)
+      ++ ",\"record_bytes\":" ++ Nat.toText recordSize
+      ++ ",\"phases\":{" ++ phases marks ++ "}}"
+  writeAtomically (dir / ("done-" ++ name ++ ".json")) (Text.toUtf8 line)
+  printLine line
+  bench.dev.serve dir output' (step Nat.+ 1)
+
+bench.cards.s400i.dev.push : '{IO, Exception} ()
+bench.cards.s400i.dev.push = bench.dev.push bench.cards.s400i.ui
+
+bench.cards.s400i.dev.server : '{IO, Exception} ()
+bench.cards.s400i.dev.server = bench.dev.server bench.cards.s400i.ui
+
+bench.cards.s1600.dev.base : '{IO, Exception} ()
+bench.cards.s1600.dev.base = bench.dev.base bench.cards.s1600.ui
+
+bench.cards.s1600.dev.delta : '{IO, Exception} ()
+bench.cards.s1600.dev.delta = bench.dev.delta bench.cards.s1600.ui
+
+bench.cards.s1600.dev.push : '{IO, Exception} ()
+bench.cards.s1600.dev.push = bench.dev.push bench.cards.s1600.ui
+
+bench.cards.s1600.dev.server : '{IO, Exception} ()
+bench.cards.s1600.dev.server = bench.dev.server bench.cards.s1600.ui
+
+---
+
+Tried 2026-10-31 and dropped: a push that takes the UI as a term link, so the push's run loads none of the UI's code. UCM 1.5's update does not move a termLink literal to the edited term (the push kept pushing the old UI), and building the value through unison_internal's encoder cost more per run (0.8-1.2 s) than loading the UI's closure (0.6-0.7 s).
+
+{{ The value of the top-level term at `link`, built from the link alone, so that nothing need load the term's code: for a term defined as a function, such as a `do` block, it is the value {Value.value} would give. }}
+bench.dev.termValue : Link.Term ->{Exception} Value
+bench.dev.termValue link =
+  use lib.dfreeman_warp_r7f.lib.unison_internal_0_0_25 Reference.fromTermLink runtime.GroupRef.GR runtime.Value.Partial runtime.Value.toBuiltin
+  toBuiltin (Partial (GR (fromTermLink link) 0) [])
+
+bench.dev.tests.termValueMatchesValue : [Result]
+bench.dev.tests.termValueMatchesValue =
+  match catch do serialize_v4 (termValue (termLink bench.cards.s400i.ui)) === serialize_v4 (Value.value bench.cards.s400i.ui) with
+    Right true -> [Ok "a value built from a link serialises as the term's own"]
+    Right false -> [Fail "a value built from a link serialises differently"]
+    Left _ -> [Fail "building a value from a link raised"]

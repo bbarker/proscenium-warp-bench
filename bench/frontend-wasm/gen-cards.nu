@@ -84,8 +84,8 @@ export def rust-source [count: int, edited: bool] {
         "use leptos::prelude::*;\n" ...$cards ...$page_defs $app] | str join "\n"
 }
 
-def unison-card [ns: string, index: int, edited: bool] {
-    let body = card-body $index $edited
+# One Unison card, `<ns>.card<index>`, whose paragraph reads `body`.
+export def unison-card [ns: string, index: int, body: string] {
     $"($ns).card($index) : '{Render {}} \(\)
 ($ns).card($index) = do
   use Render text
@@ -116,7 +116,7 @@ export def unison-source [count: int] {
     let ns = $"bench.cards.s($count)"
     let edited = $"($ns).edited"
     let page_list = pages $count | enumerate
-    let cards = 0..<$count | each {|index| unison-card $ns $index false }
+    let cards = 0..<$count | each {|index| unison-card $ns $index (card-body $index false) }
     let page_defs = $page_list | each {|page| unison-page $ns $ns $ns $page.index $page.item }
     # The edited copy redefines only what the edit reaches: card 7, its page and the UI.
     let edited_page = $EDITED_CARD // $CARDS_PER_PAGE
@@ -125,7 +125,7 @@ export def unison-source [count: int] {
     }
     let edited_page_calls = $edited_cards | each {|card| $"    ($card)\(\)" } | str join "\n"
     let edited_defs = [
-        (unison-card $edited $EDITED_CARD true)
+        (unison-card $edited $EDITED_CARD (card-body $EDITED_CARD true))
         $"($edited).page($edited_page) : '{Render {}} \(\)\n($edited).page($edited_page) = do\n  el.div [class \"page\"] do\n($edited_page_calls)\n"
         ($"($edited).ui : '{Render {}} \(\)\n($edited).ui = do\n  el.main [attr.id \"app\"] do\n" + (0..<($page_list | length) | each {|page|
             if $page == $edited_page { $"    ($edited).page($page)\(\)" } else { $"    ($ns).page($page)\(\)" }
