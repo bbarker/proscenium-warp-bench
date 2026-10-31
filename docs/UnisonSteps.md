@@ -186,7 +186,7 @@ scratch/main> clone @dfreeman/warp/releases/1.3.0 @dfreeman/warp/perf-r4
 
 Each later change to warp `perf-r7` was picked up the same way, with
 `fork @dfreeman/warp/perf-r7: lib.dfreeman_warp_r7<x>` and
-`upgrade <previous> dfreeman_warp_r7<x>`. In the original working copy the lib is
+`upgrade <previous> dfreeman_warp_r7<x>`. In the benchmark codebase the lib is
 `dfreeman_warp_r7e`, after five forks:
 1. the boundary change;
 2. the equality fix redone on round 4's version;

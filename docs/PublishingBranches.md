@@ -1,7 +1,7 @@
 # Publishing the Unison branches
 
-The branches live in a UCM codebase (the benchmark codebase, `target/unison-bench-codebase` in the
-original working copy, or any codebase where `docs/UnisonSteps.md` has been followed), in local
+The branches live in a UCM codebase (the benchmark codebase, kept untracked at
+`target/unison-bench-codebase` in the working copy where the benchmarks were run, or any codebase where `docs/UnisonSteps.md` has been followed), in local
 projects named `@dfreeman/ink`, `@dfreeman/warp` and `@dfreeman/proscenium`, because they are clones of
 those upstream projects. You cannot push to another user's namespace, so each branch is pushed to a
 project of the same name under your own handle (below, `@nusentry`; change it with
