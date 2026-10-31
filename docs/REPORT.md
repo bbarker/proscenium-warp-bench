@@ -41,31 +41,47 @@ repeat it.
   against warp's 439 KB, plus warp's 11 KB loader. The synthetic cards are very
   repetitive, which flatters that. For the smallest app the floors are close: 37 KB
   brotli for Leptos and 40 KB for warp, with JS included.
-- **Runtime was the real drawback. Five rounds of library and runtime work have brought
-  it from 50–300 times Leptos to 1.4–7 times.** The latest run (2026-10-29, medians of
-  10, load 2.4–2.9, timed until the DOM shows the result):
+- **Runtime was the real drawback. Library and runtime work brought Proscenium from
+  50–300 times Leptos to 1.4–7 times by round 5, and a signals library on the same warp
+  runs at 0.7–1.2 times on every operation but a swap.** Two runs, timed until the DOM
+  shows the result. The first six columns are 2026-10-29 (medians of 10, load 2.4–2.9),
+  and the last four 2026-10-30 (medians of 9, interleaved, load 2–3,
+  `results/round7-signals-rows.json`), with Leptos timed again in each:
 
-  | Operation (ms) | Leptos | Stock | Round 2 | Round 4 | **Round 5** | Round 5 vs Leptos |
-  | --- | --- | --- | --- | --- | --- | --- |
-  | select a row | 0.55 | 186 | 3.4 | 0.6 | **1.0** | 0.5–1.2 ms on both across runs |
-  | update every 10th row | 0.9 | 245 | 16.1 | 6.5 | **6.5** | 7 times |
-  | swap two rows | 0.6 | 5,999 | 19.6 | 6.1 | **4.1** | 7 times |
-  | remove a row | 0.9 | 242 | 19.0 | 6.4 | **5.0** | 5.5 times |
-  | create 1,000 rows | 26.7 | 1,717 | 343.9 | 105.9 | **90.0** | 3.4 times |
-  | replace 1,000 rows | 26.8 | 14,037 | 309.9 | 112.4 | **90.3** | 3.4 times |
-  | append 1,000 rows | 19.8 | 2,212 | 289.1 | 77.8 | **53.9** | 2.7 times |
-  | clear 2,000 rows | 13.1 | 174 | 51.2 | 59.7 | **21.3** | 1.6 times |
-  | create 10,000 rows | 165.2 | 20,862 | 2,861.6 | 852.1 | **631.2** | 3.8 times |
-  | clear 10,000 rows | 81.5 | 879 | 256.7 | 160.4 | **114.6** | 1.4 times |
-  | JS heap at 10,000 rows (MB) | 9.6, plus 21.8 linear memory | 184 | 214 | 157 | **138.5** | 4.4 times |
+  | Operation (ms) | Leptos, Oct 29 | Stock | Round 2 | Round 4 | Round 5 | Leptos, Oct 30 | Round 7 | Tree | **Signals** |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | select a row | 0.55 | 186 | 3.4 | 0.6 | 1.0 | 0.6 | 0.7 | 0.7 | **0.4** |
+  | update every 10th row | 0.9 | 245 | 16.1 | 6.5 | 6.5 | 0.7 | 7.4 | 5.9 | **0.8** |
+  | swap two rows | 0.6 | 5,999 | 19.6 | 6.1 | 4.1 | 0.6 | 4.0 | 1.8 | **2.1** |
+  | remove a row | 0.9 | 242 | 19.0 | 6.4 | 5.0 | 1.0 | 4.5 | 1.8 | **1.0** |
+  | create 1,000 rows | 26.7 | 1,717 | 343.9 | 105.9 | 90.0 | 26.4 | 79.9 | 69.2 | **31.2** |
+  | replace 1,000 rows | 26.8 | 14,037 | 309.9 | 112.4 | 90.3 | 26.7 | 83.5 | 74.7 | **31.1** |
+  | append 1,000 rows | 19.8 | 2,212 | 289.1 | 77.8 | 53.9 | 18.5 | 47.3 | 35.5 | **14.0** |
+  | clear 2,000 rows | 13.1 | 174 | 51.2 | 59.7 | 21.3 | 14.6 | 36.2 | 39.1 | **13.1** |
+  | create 10,000 rows | 165.2 | 20,862 | 2,861.6 | 852.1 | 631.2 | 161.1 | 557.6 | 419.4 | **154.8** |
+  | clear 10,000 rows | 81.5 | 879 | 256.7 | 160.4 | 114.6 | 80.6 | 110.6 | 169.0 | **59.1** |
+  | JS heap at 10,000 rows (MB) | 9.6, plus 21.8 linear memory | 184 | 214 | 157 | 138.5 | 9.7, plus 21.8 linear memory | 141.7 | 120.5 | **25.4** |
 
-  The stock column is round 2's run and the round 2 column an earlier run of the same
-  day, both kept for scale. All but the stock column use the corrected harness (see "How
-  the harness times" under Runtime).
-  - **Interactions take 1–6.5 ms.** That is within a frame, and the next frame lands when
-    Leptos's does: 18.2 against 18.5 ms for a swap, and 19.5 against 19.4 for a remove.
-    The work itself is still 5.5–7 times Leptos's.
-  - **Building lists is 2.7–3.8 times Leptos's work, but 1.4–2 times on screen.** Layout
+  - **The columns.** Stock is round 2's run, and round 2 an earlier run of the same day,
+    both kept for scale. All but stock use the corrected harness (see "How the harness
+    times" under Runtime).
+    - **Round 7** is Proscenium on ink after the boundary work ("Round 7").
+    - **Tree** is the prototype of Proscenium's own tree in place of ink, behind the same
+      API ("A first prototype behind Proscenium's API").
+    - **Signals** is the minimal signals core, with the reactive context passed
+      explicitly ("Signals, without implicits").
+  - **Reading across runs.** Compare within a run: load moves every column. Round 7's own
+    run put create 1,000 at 86.5 ms, against 79.9 here. Sub-millisecond operations move
+    by half a millisecond between runs: select took 0.5–1.2 ms on both Leptos and round 5.
+    Round 7's and the tree's clear 2,000 include a garbage collection owed by the earlier
+    operations. Timed alone, round 7's clear matches round 5's (see "Round 7").
+  - **Interactions take 1–6.5 ms in round 5.** That is within a frame, and the next frame
+    lands when Leptos's does: 18.2 against 18.5 ms for a swap, and 19.5 against 19.4 for
+    a remove. The work itself is still 5.5–7 times Leptos's.
+  - **Signals do the same work as Leptos.** A swap is the exception, at 2.1 ms against
+    0.6, which goes to the list's reconcile, the same algorithm as the tree's. The heap at
+    10,000 rows is less than Leptos's JS heap and linear memory together.
+  - **Building lists in round 5 is 2.7–3.8 times Leptos's work, but 1.4–2 times on screen.** Layout
     and paint cost both the same: about 40 ms for 1,000 rows and 400 ms for 10,000. To the
     first frame that shows them, 1,000 rows take 127 ms against 64, and 10,000 take
     1,015 against 577.
@@ -2444,8 +2460,6 @@ The modules are 19.9 KB (rows) and 29.1 KB (meals) brotli.
   Implicits, under the open RFC (unisonweb/unison #6238), elaborate to ordinary arguments,
   so they would run as explicit passing does. Without context functions in its v1, each
   effect would still bind its context by hand.
-
-### Next experiments, by expected payoff
 
 ### Next experiments, by expected payoff
 
