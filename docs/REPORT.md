@@ -10,16 +10,41 @@ repeat it.
 
 ## Executive summary
 
-- **Release builds: 10 to 25 times faster, and the gap grows with size.** Each case below
-  is a one-line edit to the scaling app (N stateful cards):
+- **Builds: warp is 10 to 25 times faster for release, and 2 to 9 times faster in the
+  dev loop. The gap grows with size.** Each case is a one-line edit to the scaling app
+  (N stateful cards). The release columns time the build. The dev columns time the edit
+  until the running page shows it.
 
-  | Cards | Leptos | warp | warp's time is |
-  | --- | --- | --- | --- |
-  | 400 | **83 s** (33 s rustc with fat LTO, 50 s wasm-opt) | about **8 s** | 2.4 s codegen, 2.7 s wasm-opt, 3.5 s start-up |
-  | 1,600 | **634 s** (154 s rustc, 479 s wasm-opt) | about **26 s** | 7.7 s codegen, 14.5 s wasm-opt, 3.5 s start-up |
+  | Cards | Leptos release | warp release | Leptos dev | warp dev, codegen cache |
+  | --- | --- | --- | --- | --- |
+  | 400 | **83 s** | about **8 s** | 7.5–10.6 s | **3.4 s** |
+  | 1,600 | **634 s** | about **26 s** | 36–48 s | **5.4 s** |
 
+  Where the time goes:
+
+  | Build | 400 cards | 1,600 cards |
+  | --- | --- | --- |
+  | Leptos release | 33 s rustc with fat LTO, 50 s wasm-opt | 154 s rustc, 479 s wasm-opt |
+  | warp release | 2.4 s codegen, 2.7 s wasm-opt, 3.5 s start-up | 7.7 s codegen, 14.5 s wasm-opt, 3.5 s start-up |
+  | Leptos dev | 3.9–6.8 s rustc, 2.7–2.9 s wasm-bindgen, 0.9 s for a reload that loses the page's state | 19.5–28.1 s rustc, 10.0–13.0 s wasm-bindgen, 6.4 s reload |
+  | warp dev, codegen cache | 1.7 s typecheck, 0.8 s `update`, 0.9 s to ship the code and build the delta (warp's share: 21 ms), 2–6 ms on the page, which keeps its state | 1.7 s typecheck, 1.1 s `update`, 2.4 s to ship and build (warp: 40 ms), 2–4 ms on the page |
+
+  The dev parts are each a median of their own, so they need not add up to the total.
   Leptos's release cost grows faster than its code does; warp's codegen grows about in
   line with it.
+- **The warp dev column is warp's codegen cache, wired to a running page**
+  ([The dev loop, wired up](#the-dev-loop-wired-up)).
+  - **The pieces.** `warp.incremental` emits only the terms the previous build lacked,
+    by hash. Three pieces of glue make it a dev loop: the build record kept on disk, a
+    `CodeCache` base module, and a page that loads each delta and renders it on the
+    same root. A warm build server beside UCM, holding warp and the record in memory,
+    takes the cost of a one-card edit in warp to 20–41 ms. The page applies it in 2–6 ms.
+  - **What is left is UCM's work:** typechecking, `update`, and starting the `run` that
+    ships the code, which grows with the app. A session's first `run` takes seconds to
+    minutes.
+  - **One catch.** `update` re-checks every dependent of what changed, at about
+    60–100 ms each, so an edit to a widely used definition costs more than a leaf
+    edit's second.
 - **With full rebuilds, the edit loop is a wash at 400 cards and about 2.5 times faster
   at 1,600.**
   - **Leptos dev builds:** 6.8 s at 400 cards, 40 s at 1,600 (30 s rustc and 10 s of
@@ -28,21 +53,6 @@ repeat it.
     and that hardly changes with app size. A full rebuild then takes 5 s at 400 cards in a
     warm UCM session and 13 s at 1,600. warp's own share of that is 2.4–2.6 s and
     7.7–8.9 s.
-- **With warp's codegen cache wired up, an edit reaches the running page in 3.4 s at
-  400 cards and 5.4 s at 1,600, and the page keeps its state**
-  ([The dev loop, wired up](#the-dev-loop-wired-up)). Leptos's dev build of the same edit
-  takes 7.5–10.6 s and 36–48 s, including a reload that loses the state.
-  - **The pieces.** `warp.incremental` emits only the terms the previous build lacked,
-    by hash. Three pieces of glue make it a dev loop: the build record kept on disk, a
-    `CodeCache` base module, and a page that loads each delta and renders it on the
-    same root. A warm build server beside UCM, holding warp and the record in memory,
-    takes the cost of a one-card edit in warp to 20–41 ms. The page applies it in 2–6 ms.
-  - **What is left is UCM's work.** Typechecking the edit takes 1.5–1.7 s and `update`
-    0.7–1.1 s. Starting the `run` that ships the code takes 0.9 s at 400 cards and 2.4 s
-    at 1,600, and a session's first `run` takes seconds to minutes.
-  - **One catch.** `update` re-checks every dependent of what changed, at about
-    60–100 ms each, so an edit to a widely used definition costs more than a leaf
-    edit's second.
 - **The shipped code is comparable in size.** After wasm-opt, warp's wasm is about half
   the size of Leptos's at every app size: 2.5 MB against 5.5 MB at 1,600 cards. Rust's
   monomorphised output compresses unusually well, though: brotli shrinks it to 178 KB,
