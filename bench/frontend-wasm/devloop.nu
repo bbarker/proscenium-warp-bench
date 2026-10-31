@@ -1,7 +1,7 @@
 #!/usr/bin/env nu
 
 use std/assert
-use gen-cards.nu [card-body unison-card]
+use gen-cards.nu [card-body unison-card hub-body rust-hub-source unison-hub-paragraph unison-hub-card unison-hub-source]
 
 # The dev loop, timed (docs/REPORT.md, "The dev loop, wired up"): a run of
 # edits to the cards app, each loaded and `update`d in UCM and then built as a
@@ -10,6 +10,9 @@ use gen-cards.nu [card-body unison-card]
 #   nu bench/frontend-wasm/devloop.nu run <count> [--ns <namespace>] [--edits <n>]
 #   nu bench/frontend-wasm/devloop.nu warm <count> [--ns <namespace>] [--edits <n>]
 #   nu bench/frontend-wasm/devloop.nu page <count> <mode> [--iterations <n>] [--edits <n>]
+#   nu bench/frontend-wasm/devloop.nu hub <count> [--edits <n>]
+#   nu bench/frontend-wasm/devloop.nu hub-leptos <count> [--edits <n>]
+#   nu bench/frontend-wasm/devloop.nu hub-page <count> [--iterations <n>]
 #   nu bench/frontend-wasm/devloop.nu self-test
 #
 # - `run`: each edit's delta is a UCM `run` of `<ns>.dev.delta`, a process that
@@ -21,6 +24,12 @@ use gen-cards.nu [card-body unison-card]
 #   which ships the new code to it and waits for the delta.
 # - `page`: the browser half for a finished `run` or `warm`: devloop.mjs loads
 #   the base page and applies each edit's delta to it.
+# - `hub`: an edit to a widely used definition (docs/Gaps.md). A `run` loop
+#   over the hub variant of the app (gen-cards.nu, `bench.hub.s<count>`),
+#   loaded at the start of the session, whose edits alternate between one
+#   card and the paragraph helper every card uses (see hub-plan).
+#   `hub-leptos` makes the same edits to the Leptos copy and times a dev build
+#   of each, and `hub-page` is the browser half.
 #
 # Every UCM step is timed between `bench.build.stamp` runs, less the cost of a
 # stamp itself (the median of three back to back). Each result goes to
@@ -66,11 +75,39 @@ export def edits [count: int, ns: string, edits: int, first: int] {
     }
 }
 
-# The transcript that times the edits, run from `BRANCH`.
-export def transcript [mode: string, ns: string, out: string, edit_files: list<string>, full_out: string] {
+# The hub run's edits, alternating: a card at odd steps (`first`, the middle
+# card, `first`'s neighbour, then round again) and the paragraph helper every
+# card uses at even steps, which gives every paragraph a new prefix. Each
+# record has the card the page checks and the paragraph it should then read,
+# the Unison file that makes the edit, and the state after it (`prefix`,
+# `bodies`), which the Rust copy is written from.
+export def hub-plan [count: int, ns: string, edits: int, first: int] {
+    let leaf_cards = [$first ($count // 2) ($first + 1)]
+    mut prefix = ""
+    mut bodies = {}
+    mut plan = []
+    for step in 1..$edits {
+        if $step mod 2 == 1 {
+            let card = $leaf_cards | get ((($step - 1) // 2) mod ($leaf_cards | length))
+            let body = edit-text $step $card
+            $bodies = $bodies | upsert ($card | into string) $body
+            $plan = $plan | append { step: $step, kind: "leaf", card: $card, text: $"($prefix)($body)", source: (unison-hub-card $ns $card $body), prefix: $prefix, bodies: $bodies }
+        } else {
+            $prefix = $"Hub ($step): "
+            let card = $count - 1
+            $plan = $plan | append { step: $step, kind: "hub", card: $card, text: $"($prefix)(hub-body $bodies $card)", source: (unison-hub-paragraph $ns $prefix), prefix: $prefix, bodies: $bodies }
+        }
+    }
+    $plan
+}
+
+# The transcript that times the edits, run from `BRANCH`. Each `setup` file is
+# loaded and `update`d first, outside the timed part.
+export def transcript [mode: string, ns: string, out: string, edit_files: list<string>, full_out: string, --setup: list<string> = []] {
     let prompt = $"($BRANCH)>"
     let stamp = {|label| $"($prompt) run bench.build.stamp ($label)" }
-    let opening = [(do $stamp "s0") (do $stamp "s1") (do $stamp "s2")]
+    let setup_lines = $setup | each {|file| [$"($prompt) load ($file)" $"($prompt) update"] } | flatten
+    let opening = [...$setup_lines (do $stamp "s0") (do $stamp "s1") (do $stamp "s2")]
     let base = if $mode == "run" { [$"($prompt) run ($ns).dev.base ($out)" (do $stamp "base")] } else { [] }
     let steps = $edit_files | enumerate | each {|edit|
         let step = $edit.index + 1
@@ -132,6 +169,27 @@ def write-inputs [count: int, ns: string, mode: string, edit_count: int, first: 
     { planned: $planned, out: $out, script: $script }
 }
 
+def write-hub-inputs [count: int, edit_count: int, first: int] {
+    let ns = $"bench.hub.s($count)"
+    let work = work-dir
+    mkdir $work
+    let app = $work | path join $"hub-($count).u"
+    unison-hub-source $count | save --force $app
+    let planned = hub-plan $count $ns $edit_count $first
+    let files = $planned | each {|edit|
+        let file = $work | path join $"hub-($count)-edit($edit.step).u"
+        $edit.source | save --force $file
+        $file
+    }
+    let out = build-dir $count "hub"
+    clear-build $out
+    let full_out = build-dir $count "hub-full"
+    mkdir $full_out
+    let script = $work | path join $"hub-($count).md"
+    transcript "run" $ns $out $files $full_out --setup [$app] | save --force $script
+    { planned: $planned, out: $out, script: $script }
+}
+
 def run-transcript [script: string] {
     let started = date now
     let result = do { ^ucm -c (codebase) transcript.fork $script } | complete
@@ -150,7 +208,7 @@ def summarise [mode: string, count: int, planned: list, timed: record, server: r
     let steps = $planned | each {|edit|
         let inner = $found | where {|line| ($line.build? == $"delta-($edit.step)") or ($line.push? == ($edit.step | into string)) } | get 0?
         let at = {|label| $spans.spans | get --optional $"($label)-($edit.step)" }
-        { step: $edit.step, card: $edit.card, load_ms: (do $at "loaded"), update_ms: (do $at "updated"), build_ms: (do $at "built"), inner: $inner }
+        { step: $edit.step, kind: ($edit.kind? | default "leaf"), card: $edit.card, load_ms: (do $at "loaded"), update_ms: (do $at "updated"), build_ms: (do $at "built"), inner: $inner }
     }
     {
         kind: "devloop", mode: $mode, cards: $count, at: (date now | format date "%+")
@@ -164,7 +222,7 @@ def summarise [mode: string, count: int, planned: list, timed: record, server: r
 
 def save-result [result: record] {
     $result | to json --raw | $in + "\n" | save --append (bench-dir | path join "results" "devloop-builds.jsonl")
-    print ($result.steps | select step card load_ms update_ms build_ms | table)
+    print ($result.steps | select step kind card load_ms update_ms build_ms | table)
     $result
 }
 
@@ -252,6 +310,54 @@ def "main page" [
     ^node (bench-dir | path join "devloop.mjs") $"warp/cards-($count)-dev-($mode)" $iterations ...$steps
 }
 
+# An edit to a widely used definition: the hub variant's `run` loop.
+def "main hub" [
+    count: int
+    --edits: int = 6      # how many edits, alternating card and helper
+    --first: int = 7      # the first card edited
+] {
+    let inputs = write-hub-inputs $count $edits $first
+    let load_before = load-average
+    let timed = run-transcript $inputs.script
+    save-result (summarise "hub" $count $inputs.planned $timed {} $load_before)
+}
+
+# The Leptos copy of the hub run: a dev build of the hub variant, then one
+# after each edit of hub-plan, each timed by bench.nu (results/builds.jsonl,
+# labelled hub-<count>-<step>-<kind>). The crate's body is put back to the
+# plain cards after.
+def "main hub-leptos" [
+    count: int
+    --edits: int = 6
+    --first: int = 7
+    --stack-mb: int = 8   # as the dev loop's Leptos rows, so that the page mounts
+] {
+    let crate_body = bench-dir | path join "leptos" "cards" "src" "generated.rs"
+    let states = [{ step: 0, kind: "base", prefix: "", bodies: {} } ...(hub-plan $count "" $edits $first)]
+    let built = $states | each {|state|
+        rust-hub-source $count $state.prefix $state.bodies | save --force $crate_body
+        let done = ^nu (bench-dir | path join "bench.nu") leptos cards --dev --stack-mb $stack_mb --name $"cards-($count)" --label $"hub-($count)-($state.step)-($state.kind)" | complete
+        if $done.exit_code != 0 {
+            print $done.stdout $done.stderr
+            error make { msg: $"the Leptos build after step ($state.step) failed" }
+        }
+        open --raw (bench-dir | path join "results" "builds.jsonl") | lines | last | from json | select label compile_s bindgen_s total_s load
+    }
+    ^nu (bench-dir | path join "gen-cards.nu") $count | ignore
+    print ($built | table)
+}
+
+# The browser half of a finished hub run.
+def "main hub-page" [
+    count: int
+    --edits: int = 6
+    --first: int = 7
+    --iterations: int = 10
+] {
+    let steps = hub-plan $count $"bench.hub.s($count)" $edits $first | each {|edit| $"($edit.step)=($edit.card):($edit.text)" }
+    ^node (bench-dir | path join "devloop.mjs") $"warp/cards-($count)-dev-hub" $iterations ...$steps
+}
+
 def "main self-test" [] {
     assert equal (edited-cards 400 6 7) [7 399 7 200 8 7]
     assert equal (edit-text 2 9) "Edit 2: Body text for card 9: juliet alpha bravo charlie delta."
@@ -263,6 +369,17 @@ def "main self-test" [] {
     assert ($script | str contains $"($BRANCH)> run bench.cards.s400i.dev.push /out 1")
     assert not ($script | str contains "dev.base")
     assert ((transcript "run" "ns" "/out" ["/e1.u"] "/full") | str contains "run ns.build bare /full")
+    let with_setup = transcript "run" "ns" "/out" ["/e1.u"] "/full" --setup ["/app.u"]
+    assert (($with_setup | str index-of "load /app.u") < ($with_setup | str index-of "stamp s0"))
+    let hub = hub-plan 400 "bench.hub.s400" 6 7
+    assert equal ($hub | get kind) [leaf hub leaf hub leaf hub]
+    assert equal ($hub | get card) [7 399 200 399 8 399]
+    assert equal $hub.0.text (edit-text 1 7)
+    assert equal $hub.1.text $"Hub 2: (card-body 399 false)"
+    assert equal $hub.2.text $"Hub 2: (edit-text 3 200)"
+    assert equal ($hub.4.bodies | columns) ["7" "200" "8"]
+    assert ($hub.1.source | str contains "p [] do text (\"Hub 2: \" ++ body)")
+    assert ($hub.2.source | str contains "bench.hub.s400.paragraph \"Edit 3: ")
     let log = "STAMP s0 100.0\nSTAMP s1 110.0\nSTAMP s2 122.0\n{\"build\":\"delta-1\",\"emitted\":7}\nSTAMP loaded-1 1000.0"
     let spans = intervals (stamps $log)
     assert equal $spans.stamp_ms 11.0

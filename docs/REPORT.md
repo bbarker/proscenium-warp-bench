@@ -42,9 +42,10 @@ repeat it.
   - **What is left is UCM's work:** typechecking, `update`, and starting the `run` that
     ships the code, which grows with the app. A session's first `run` takes seconds to
     minutes.
-  - **One catch.** `update` re-checks every dependent of what changed, at about
-    60–100 ms each, so an edit to a widely used definition costs more than a leaf
-    edit's second.
+  - **One catch: an edit to a widely used definition** takes 20–23 s to reach the page
+    at 400 cards, against Leptos's 7.9–9.2 s. An edit changes the hash of everything
+    that depends on it, and `update`, UCM's `run` and warp each redo all of them
+    ([`docs/Gaps.md`](Gaps.md#an-edit-to-a-widely-used-definition)).
 - **With full rebuilds, the edit loop is a wash at 400 cards and about 2.5 times faster
   at 1,600.**
   - **Leptos dev builds:** 6.8 s at 400 cards, 40 s at 1,600 (30 s rustc and 10 s of
@@ -180,12 +181,35 @@ repeat it.
     with `update` came up in [the dev loop](#the-dev-loop-wired-up):
     - a `termLink` literal keeps naming the old term;
     - editing a name whose term has other names leaves its dependents unchanged.
+  - **Ours, in round 7:** warp's `Text` code imported five `wasm:js-string` builtins that
+    the loader had no JS version of, so a browser without the builtins (Safari before
+    26.2) could not load the module. It is fixed on warp's `offer-3-text`, `perf-r7-142`
+    and `perf-r7`
+    ([the fallback](Gaps.md#found-on-the-way-the-string-builtin-fallback)).
   - **Our harness:** until round 5, it counted the browser's layout and paint against
     some operations ([How the harness times](#how-the-harness-times)).
 - **A Leptos limit we may hit:** mounting the 1,600-card app, with 80 page components in
   one `view!`, overflowed wasm's default 1 MB stack in dev and release builds
   (`memory access out of bounds`). So did the 400-card app in a dev build. An 8 MB stack
   fixed both. Nothing warns an app as it approaches the limit.
+- **Where Leptos is still ahead** has its own page, [`docs/Gaps.md`](Gaps.md). It gives
+  each gap's size, its cause as far as it is known, whether it looks fixable, and the
+  next step. The largest:
+  - **An edit to a widely used definition**, three times Leptos's dev build (above).
+  - **Browsers:** warp needs Wasm GC and tail calls, so Safari 18.2 or later. Only
+    Chromium was measured.
+  - **Runtime:**
+    - Proscenium as it is takes 2–3 times Leptos's time to build lists.
+    - With signals, a swap takes 3.5 times Leptos's time, and the meals page starts 1.4
+      times as slowly.
+  - **Compressed size** on the synthetic app: 1.3 times Leptos's at 400 cards and 2.5
+    times at 1,600.
+
+  **The Unison JIT** in UCM's trunk will not change the browser side: it compiles UCM's
+  own interpreter code to native code, not to wasm. By speeding up warp itself it might
+  take about a sixth off a release build, and it would barely touch the dev loop. That
+  is estimated from warp's measured phases; measuring it needs the trunk binary
+  ([the JIT](Gaps.md#will-the-unison-jit-help)).
 - **Recommendation:**
   - The build-time win is real, and it grows with app size.
   - Interactive screens no longer feel different from Leptos. On Proscenium as it is, an
@@ -288,9 +312,10 @@ one-off cost:
   resolution is not the main cost.
 
 The caveat at the scale of a real app is that `update` re-typechecks every transitive
-dependent of what changed. An edit to a leaf costs a second. An edit to a definition that
-a thousand others use would cost one to two minutes; that is an estimate, at 60–100 ms
-per definition.
+dependent of what changed. An edit to a leaf costs a second. An edit to a helper that
+424 definitions use took 9.8–10.3 s in `update`, about 21 ms per dependent, and 20–23 s
+from the edit to the page in all ([`docs/Gaps.md`](Gaps.md#an-edit-to-a-widely-used-definition)).
+At a thousand dependents, `update` alone would take about 20 s.
 
 ### Cold builds
 
@@ -459,9 +484,12 @@ Things learned on the way:
   page over a socket. That is glue, and every piece it needs is built here.
 - **A reload of the page** has to load the base and then every delta in order, or ask
   for a fresh base. The record and the deltas are all on disk, so either works.
-- **An edit to a widely used definition** still costs UCM about 60–100 ms for each
-  dependent during `update`. warp's share stays the same, apart from re-emitting the
-  dependents whose hashes changed.
+- **An edit to a widely used definition** gives every dependent a new hash. Measured
+  with a helper that 400 cards use: about 21 ms per dependent in `update`, about 16 ms in
+  preparing the `run`, warp re-emitting 844 terms, and a 693 KB delta that the page
+  applies in about 50 ms, still keeping its state. That makes 20–23 s from the edit to
+  the page, against Leptos's 7.9–9.2 s. [`docs/Gaps.md`](Gaps.md#an-edit-to-a-widely-used-definition)
+  lists a fix for each layer.
 
 ## Code size
 
@@ -2571,6 +2599,10 @@ boundary (round 7).
    - a dev server process to replace the transcript and Playwright;
    - from UCM, a `run` that does not re-prepare an unchanged closure. That takes
      0.9–2.3 s of every edit, and minutes on a session's first `run` at 1,600 cards.
+   - an edit to a widely used definition, now the loop's largest gap: about three times
+     Leptos's dev build at 400 cards. `docs/Gaps.md` lists a fix for each layer: a
+     type-preserving `update` that does not typecheck again, and a warp dev mode that
+     patches the old term's slot.
 
 ## Where things are
 
@@ -2599,7 +2631,13 @@ boundary (round 7).
     warm server) and its browser half, with results in `results/devloop-builds.jsonl`
     and `results/devloop.jsonl`. The first two 1,600-card runs in
     `devloop-builds.jsonl` (10:43 and 10:47) edited shared cards and built empty deltas.
-    They are kept only for their first-`run` timings.
+    They are kept only for their first-`run` timings. The `hub`, `hub-leptos` and
+    `hub-page` subcommands time an edit to a helper every card uses
+    (`docs/Gaps.md`); the 25-card `hub` row is a smoke run of two edits.
+  - `fallback.mjs`: loads a warp build with the `wasm:js-string` builtins withheld, as
+    a browser without them would, and checks that the page is the same.
+- `docs/Gaps.md`: where Leptos is still ahead, each gap with its cause and next step,
+  and whether the Unison JIT would help.
 - `docs/TailResumptive.md`: the design note for compiling a handler that resumes once, at
   the end, as a direct call, with the shapes detected and the ceiling measured.
 - `bench/handler-cost/`: `run.mjs` times warp `handler-cost`'s million operations in
@@ -2648,7 +2686,9 @@ boundary (round 7).
       `perf-r7-mini` (`bench.mini`), the prototype `perf-r7-tree` (`bench.tree`) and the
       signals core `perf-r7-signals` (`bench.sig`).
   - on 2026-10-31, Proscenium `devloop` (`bench.dev`, on `perf-r7`, with the 1,600-card
-    app as `bench.cards.s1600`).
+    app as `bench.cards.s1600`), and the string-builtin fallback on warp `offer-3-text`,
+    `perf-r7-142` and `perf-r7`. The hub runs load their app (`bench.hub.s<count>`) into
+    a fork each time, so it is not in the codebase.
 
     The README's branch tables say what each holds.
 
@@ -2705,6 +2745,11 @@ nu bench/frontend-wasm/devloop.nu page 400 warm --ns bench.cards.s400i    # and 
 nu bench/frontend-wasm/gen-cards.nu 400 --edit                            # then back without --edit
 nu bench/frontend-wasm/bench.nu leptos cards --dev --name cards-400 --stack-mb 8
 node bench/frontend-wasm/devloop.mjs leptos/cards-400-dev 10              # the reload a Leptos edit needs
+# An edit to a widely used definition, and the string-builtin fallback (docs/Gaps.md)
+nu bench/frontend-wasm/devloop.nu hub 400
+nu bench/frontend-wasm/devloop.nu hub-leptos 400
+nu bench/frontend-wasm/devloop.nu hub-page 400
+node bench/frontend-wasm/fallback.mjs warp/meals-bare-sig2/meals-bare --loader <a loader with the new fallback>
 ```
 
 The round 5 build entries were compiled in the bench codebase with

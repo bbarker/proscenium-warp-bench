@@ -14,7 +14,12 @@ a line on each round, and each round's section has the details.
   with app size.
 - **Edit loop:** with warp's codegen cache wired up, an edit reaches the running page in
   3.4 s at 400 cards and 5.4 s at 1,600, and the page keeps its state. Leptos's dev builds
-  take 7.5–10.6 s and 36–48 s, with a reload. Most of what is left is UCM's work.
+  take 7.5–10.6 s and 36–48 s, with a reload. Most of what is left is UCM's work. An edit
+  to a helper that every card uses is the exception: 20–23 s at 400 cards, against
+  Leptos's 7.9–9.2 s, because every dependent gets a new hash.
+- **Where Leptos is still ahead:** [`docs/Gaps.md`](docs/Gaps.md) keeps the list, with
+  each gap's cause and whether it looks fixable. It also answers whether the Unison JIT
+  will help: not in the browser, and only a little for builds.
 - **Size:** about half of Leptos's raw wasm, but larger under brotli on repetitive code.
 - **Runtime:** rounds of changes to ink, warp and Proscenium took a js-framework-benchmark
   table from 50–300 times Leptos's time to 1.4–7 times. A minimal signals library on the
@@ -26,6 +31,7 @@ a line on each round, and each round's section has the details.
 | Path | What |
 | --- | --- |
 | `docs/REPORT.md` | The report, with an executive summary at the top |
+| `docs/Gaps.md` | Where Leptos is still ahead: each gap, its cause, whether it looks fixable, the next step; and the Unison JIT |
 | `docs/ReviewResponse.md` | For the author: the work done since their review, and what it showed |
 | `docs/ProsceniumTree.md` | A tree of Proscenium's own in place of ink: the design note |
 | `docs/Signals.md` | A signals core without implicits, against the tree and Leptos |
@@ -59,7 +65,7 @@ clone of the upstream project named in the first row, and the report writes them
 | [`perf`](https://share.unison-lang.org/@nusentry/warp/code/perf) | `Universal.compare` and `Universal.==` in wasm. From warp 1.3.0. | round 1 |
 | [`perf-r4`](https://share.unison-lang.org/@nusentry/warp/code/perf-r4) | `List` as a wasm tree of arrays, direct typed JS calls, a list fuzz test. | round 4–5 |
 | [`perf-r5`](https://share.unison-lang.org/@nusentry/warp/code/perf-r5) | `List.:+` appends in place; sharing tests. No measurable change. | round 6 |
-| [`perf-r7`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7) | From `perf-r4`: JS interop, `Nat.toText` and `Text.indexOf` take unboxed arguments (`jsUnboxed`); `==` compares a function with a closure by id in wasm; `compare`, `==` and Boolean intrinsics return shared boxes; `Text.size`/`take`/`drop`/`uncons`/`unsnoc`/`repeat`/`reverse` and three `Char` builtins over `wasm:js-string`. | round 7 |
+| [`perf-r7`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7) | From `perf-r4`: JS interop, `Nat.toText` and `Text.indexOf` take unboxed arguments (`jsUnboxed`); `==` compares a function with a closure by id in wasm; `compare`, `==` and Boolean intrinsics return shared boxes; `Text.size`/`take`/`drop`/`uncons`/`unsnoc`/`repeat`/`reverse` and three `Char` builtins over `wasm:js-string`, with JS versions in the loader for a browser without the builtins. | round 7 |
 | [`perf-r7u`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7u) | `perf-r7` with `Nat.toText` written in Unison (an experiment: 8 times slower than unboxed JS). | round 7 |
 | [`perf-r7w`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7w) | `perf-r7` with `Nat.toText` in the instruction DSL (an experiment: 5 times slower than unboxed JS). | round 7 |
 | [`guard-one-shot`](https://share.unison-lang.org/@nusentry/warp/code/guard-one-shot) | `perf-r7` with every captured continuation made one-shot: a second resume traps. An experiment, to find what resumes twice. | round 7 |
@@ -67,8 +73,8 @@ clone of the upstream project named in the first row, and the report writes them
 | [`handler-cost`](https://share.unison-lang.org/@nusentry/warp/code/handler-cost) | `perf-r7` with `bench.handlerCost`: a million ability operations through a handler written as UI handlers are, under 0, 4 and 16 other handlers, against the same work as plain calls (`bench/handler-cost/`). | round 7 |
 | [`offer-1-compare-eq`](https://share.unison-lang.org/@nusentry/warp/code/offer-1-compare-eq) | On warp 1.4.2: round 1 only, `compare` and `==` in wasm with 1.4.2's JS as the fallback. Passes warp's tests. | to offer |
 | [`offer-2-list`](https://share.unison-lang.org/@nusentry/warp/code/offer-2-list) | `offer-1` + round 4's wasm `List` and its fuzz test. Passes warp's tests and the fuzz test. | to offer |
-| [`offer-3-text`](https://share.unison-lang.org/@nusentry/warp/code/offer-3-text) | On warp 1.4.2, standalone: `Text` by code point, as Unison counts and orders it. Stock warp counts UTF-16 units, splits emoji, and can miss a text `match` arm. Includes `tests.builtins.textFuzz`, a differential test of 1,800 text operations. Passes warp's tests and the fuzz. | to offer |
-| [`perf-r7-142`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7-142) | **All of the above that is worth taking, rebased onto warp 1.4.2:** rounds 1, 4 and 7, with 1.4.2's `Universal.compare` as the JS fallback, and `offer-3-text`'s `Text` by code point (round 7's wasm `Text` builtins rewritten as code point loops). warp's tests, the list fuzz and the text fuzz pass. | round 7 |
+| [`offer-3-text`](https://share.unison-lang.org/@nusentry/warp/code/offer-3-text) | On warp 1.4.2, standalone: `Text` by code point, as Unison counts and orders it. Stock warp counts UTF-16 units, splits emoji, and can miss a text `match` arm. Includes `tests.builtins.textFuzz`, a differential test of 1,800 text operations. The loader supplies the string builtins it imports for a browser without them (Safari before 26.2). Passes warp's tests and the fuzz. | to offer |
+| [`perf-r7-142`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7-142) | **All of the above that is worth taking, rebased onto warp 1.4.2:** rounds 1, 4 and 7, with 1.4.2's `Universal.compare` as the JS fallback, and `offer-3-text`'s `Text` by code point (round 7's wasm `Text` builtins rewritten as code point loops), and the loader's JS versions of every string builtin it imports. warp's tests, the list fuzz and the text fuzz pass. | round 7 |
 
 A note on 1.3.0: Proscenium 0.4.3, which the benchmark builds on, uses warp 1.3.0. The warp changes
 replace whole definitions as they were in 1.3.0, so apply them to a 1.3.0 clone and not to a newer

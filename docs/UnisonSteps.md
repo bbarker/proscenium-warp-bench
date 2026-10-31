@@ -453,6 +453,28 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
       bench.cards.s400i`, `run 1600 --first 407` and `warm 1600 --first 407`, then `page`
       with the same arguments for the browser half.
 
+      The hub runs (`docs/Gaps.md`) need nothing more on the branch: `devloop.nu hub 400`
+      writes `bench.hub.s400` and loads it into each fork.
+
+- [ ] The string-builtin fallback (2026-10-31), on the three warp branches whose `Text`
+      code imports `wasm:js-string` builtins the loader had no JS version of. Each step
+      file holds `internal.javascript.supportJS.buildImportsJS`, with all eight, and the
+      branch's `ReleaseNotes` with an entry for it. warp's tests need binaryen 133 first
+      on `PATH`; `~/.local/bin/wasm-opt` is 117, which cannot parse warp's output.
+
+```ucm
+@dfreeman/warp/offer-3-text> load unison/scratch/warp--offer-3-text-fallback.u
+@dfreeman/warp/offer-3-text> update
+@dfreeman/warp/offer-3-text> run tests
+@dfreeman/warp/perf-r7-142> load unison/scratch/warp--perf-r7-142-fallback.u
+@dfreeman/warp/perf-r7-142> update
+@dfreeman/warp/perf-r7-142> run tests
+@dfreeman/warp/perf-r7> load unison/scratch/warp--perf-r7-fallback.u
+@dfreeman/warp/perf-r7> update
+```
+
+      Then push the three again (`/tmp/unison-bench-push-fallback.txt`).
+
 - [ ] The two library offers that stand alone: ink's ordering fix on 2.0.1 (`perf`'s first
       step, `#7tptpse51l`, plus its regression tests and release notes), and Proscenium's
       `Keyed` and `Selector` on 0.4.3 (`main`):
@@ -487,6 +509,7 @@ Suggested `history.comment` lines:
 - proscenium/perf-r7-mini: `bench.mini, a keyed virtual DOM in plain Unison with memo nodes and prefix/suffix trimming; the rows app as data and through a one-handler Html ability`
 - warp/offer-3-text: `Text by code point, as Unison counts and orders it: size, take, drop, uncons, unsnoc, reverse, toCharList, indexOf and pattern steps; CompareStrings as a code point loop, fixing text matches; tests.builtins.textFuzz`
 - warp/perf-r7-142: `Text by code point, as on offer-3-text, with the wasm Text builtins of round 7 rewritten as code point loops`
+- warp/offer-3-text, perf-r7-142 and perf-r7 (2026-10-31): `buildImportsJS supplies a JS version of every wasm:js-string builtin warp imports (length, charCodeAt, codePointAt, substring, fromCodePoint as well as equals, compare, concat), so a browser without the builtins can instantiate the module`
 - proscenium/perf-r7-142: `on warp perf-r7-142 with Text by code point`
 - warp/guard-one-shot: `experiment: shift::continue poisons its data after the first resume, so a second resume of any continuation traps`
 - warp/detect-tail-resumptive: `measurement: anfToOps reports through Debug.trace whether each request-match arm resumes once in tail position (internal.build.Op.tailShape)`

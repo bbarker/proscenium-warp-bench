@@ -1,0 +1,31 @@
+{{ The JS function the loader builds a module's imports with: the runtime, its JS functions and code table, the string constants, and a JS version of every `wasm:js-string` builtin warp imports, which a browser without the builtins (Safari before 26.2, for one) takes in their place. A missing one there fails instantiation. }}
+internal.javascript.supportJS.buildImportsJS : Text
+internal.javascript.supportJS.buildImportsJS =
+  """
+  (rt) => ({
+    runtime: rt,
+    js: rt.js,
+    code: rt.code.terms,
+    '': new Proxy({}, { get: (_, k) => k }),
+    'wasm:js-string': {
+      equals: (a, b) => a === b,
+      compare: (a, b) => a === b ? 0 : a < b ? -1 : 1,
+      concat: (a, b) => a + b,
+      length: (s) => s.length,
+      charCodeAt: (s, i) => s.charCodeAt(i >>> 0),
+      codePointAt: (s, i) => s.codePointAt(i >>> 0),
+      substring: (s, start, end) => (start >>>= 0) > (end >>>= 0) ? '' : s.substring(start, end),
+      fromCodePoint: (c) => String.fromCodePoint(c >>> 0),
+    },
+  })
+  """
+
+ReleaseNotes : Doc
+ReleaseNotes =
+  {{
+  * Further hardened {Universal.compare} against edge cases in bare function and closure comparison.
+  * `Text` counts code points, as Unison does, rather than UTF-16 units. `Text.size`, `Text.take`, `Text.drop`, `Text.uncons`, `Text.unsnoc`, `Text.reverse`, `Text.toCharList` and `Text.indexOf` treat a character outside the Basic Multilingual Plane, such as an emoji, as one character, and never split it into half a surrogate pair. A text pattern's character class matches one code point.
+  * `Text` and `Char` are ordered by code point, as Unison orders them, in {Universal.compare}, in `Text.<` and its siblings, and in a `match` on text literals. That `match` binary-searches literals sorted by Unison's order, and could miss an arm whose literal was outside the Basic Multilingual Plane.
+  * `tests.builtins.textFuzz` runs 1,800 pseudo-random text operations natively and in Wasm and fails on the first difference.
+  * In a browser without the `wasm:js-string` builtins (Safari before 26.2, for one), the loader supplies `length` and `charCodeAt`, which the code point loops above import, as well as `equals`, `compare` and `concat`. Without them such a browser could not instantiate the module.
+  }}

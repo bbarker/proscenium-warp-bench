@@ -1,0 +1,51 @@
+{{ The JS function the loader builds a module's imports with: the runtime, its JS functions and code table, the string constants, and a JS version of every `wasm:js-string` builtin warp imports, which a browser without the builtins (Safari before 26.2, for one) takes in their place. A missing one there fails instantiation. }}
+internal.javascript.supportJS.buildImportsJS : Text
+internal.javascript.supportJS.buildImportsJS =
+  """
+  (rt) => ({
+    runtime: rt,
+    js: rt.js,
+    code: rt.code.terms,
+    '': new Proxy({}, { get: (_, k) => k }),
+    'wasm:js-string': {
+      equals: (a, b) => a === b,
+      compare: (a, b) => a === b ? 0 : a < b ? -1 : 1,
+      concat: (a, b) => a + b,
+      length: (s) => s.length,
+      charCodeAt: (s, i) => s.charCodeAt(i >>> 0),
+      codePointAt: (s, i) => s.codePointAt(i >>> 0),
+      substring: (s, start, end) => (start >>>= 0) > (end >>>= 0) ? '' : s.substring(start, end),
+      fromCodePoint: (c) => String.fromCodePoint(c >>> 0),
+    },
+  })
+  """
+
+ReleaseNotes : Doc
+ReleaseNotes =
+  {{
+  * Introduced a notion of incremental builds, enabling {type IO}-based builds
+    to produce lightweight WebAssembly modules containing only terms that
+    weren't already present in previous build output. See {incremental} and
+    {loadCompiledTerms} for details.
+  * 2026-10-31: In a browser without the `wasm:js-string` builtins (Safari
+    before 26.2, for one), the loader supplies every builtin warp imports:
+    `length`, `charCodeAt`, `codePointAt`, `substring` and `fromCodePoint`
+    as well as `equals`, `compare` and `concat`. Before, such a browser
+    could not instantiate a module that imported one of the five.
+  * 2026-10-30: JS builtins can take their arguments unboxed and box their
+    results in wasm ({internal.Replacement.jsUnboxed}), so the JS function
+    makes no calls back into wasm. The `JSValue` interop functions
+    (`invoke*`, `getProperty`, `setProperty*`, `callback1_`), `Nat.toText`
+    and `Text.indexOf` use it. A UI creating 1,000 table rows crossed the
+    wasm–JS boundary 197,231 times before and 32,046 after.
+  * 2026-10-30: `Universal.==` compares a plain function with a closure by
+    id in wasm instead of in JS.
+  * 2026-10-30: `Universal.compare`, `Universal.==` and the builtins with a
+    `Boolean` result return shared result boxes
+    ({internal.Replacement.sharedValues}) instead of allocating one per call.
+  * 2026-10-30: `Text.size`, `Text.take` and `Text.drop` run in wasm over the
+    `wasm:js-string` builtins (`length`, `substring`), with no call into JS.
+  * 2026-10-30: `Char.toText`, `Char.toNat`, `Char.fromNat`, `Text.uncons` and
+    `Text.unsnoc` also run in wasm over `wasm:js-string`.
+  * 2026-10-30: `Text.repeat` and `Text.reverse` run in wasm too.
+  }}
