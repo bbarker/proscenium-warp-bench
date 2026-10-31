@@ -491,7 +491,14 @@ Then `nu bench/frontend-wasm/bench.nu warp totext --variant <r5i|r7|r7u|r7w>` fo
 @dfreeman/proscenium/offer-stores> test
 ```
 
-Suggested `history.comment` lines:
+The `history.comment` lines below are in the bench codebase's history (added 2026-10-31).
+Each comment sits right after the change it describes. That is the branch's head, except
+for warp `perf-r7`, `offer-3-text` and `perf-r7-142`, whose round 7 and `Text` lines sit
+under the fallback, and Proscenium `perf-r7-tree`, whose first line sits under the meals
+change. A branch made from another shows the comments it shares. To add more, run a
+transcript in place:
+`@dfreeman/<project>/<branch>> history.comment /<branch>: "<text>"`, or
+`history.comment #<hash> "<text>"` for an earlier change. `history` lists them.
 
 - ink/perf: `keyed reconcile in O(n log n) by longest increasing run, new children move with a moved predecessor; compute_ lets a message re-run only the computation owning its cell`
 - warp/perf: `Universal.compare and Universal.== walk values in wasm, falling back to JS; list elements compared through them`
@@ -511,6 +518,7 @@ Suggested `history.comment` lines:
 - warp/perf-r7-142: `Text by code point, as on offer-3-text, with the wasm Text builtins of round 7 rewritten as code point loops`
 - warp/offer-3-text, perf-r7-142 and perf-r7 (2026-10-31): `buildImportsJS supplies a JS version of every wasm:js-string builtin warp imports (length, charCodeAt, codePointAt, substring, fromCodePoint as well as equals, compare, concat), so a browser without the builtins can instantiate the module`
 - proscenium/perf-r7-142: `on warp perf-r7-142 with Text by code point`
+- proscenium/devloop: `devloop: warp's codegen cache wired to a running page (bench.dev): CodeCache base, build record on disk, a client that loads deltas, warm build server and push`
 - warp/guard-one-shot: `experiment: shift::continue poisons its data after the first resume, so a second resume of any continuation traps`
 - warp/detect-tail-resumptive: `measurement: anfToOps reports through Debug.trace whether each request-match arm resumes once in tail position (internal.build.Op.tailShape)`
 - warp/handler-cost: `bench.handlerCost: a million ability operations through a recursive state-carrying handler, under 0, 4 and 16 other handlers, against plain calls`
