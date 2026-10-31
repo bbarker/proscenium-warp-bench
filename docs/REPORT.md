@@ -41,12 +41,12 @@ repeat it.
   against warp's 439 KB, plus warp's 11 KB loader. The synthetic cards are very
   repetitive, which flatters that. For the smallest app the floors are close: 37 KB
   brotli for Leptos and 40 KB for warp, with JS included.
-- **Runtime was the real drawback. Library and runtime work brought Proscenium from
-  50–300 times Leptos to 1.4–7 times by round 5, and a signals library on the same warp
-  runs at 0.7–1.2 times on every operation but a swap.** Two runs, timed until the DOM
-  shows the result. The first six columns are 2026-10-29 (medians of 10, load 2.4–2.9),
-  and the last four 2026-10-30 (medians of 9, interleaved, load 2–3,
-  `results/round7-signals-rows.json`), with Leptos timed again in each:
+- **Runtime was the real drawback, and most of it turned out to be the library, not
+  warp.** Rounds 1 to 5 of work on ink, warp and Proscenium took the rows suite from
+  50–300 times Leptos's time to 1.4–7 times, and round 7 and the tree cut list building
+  further. A minimal signals library on the same warp then runs it at 0.7–1.2 times on
+  every operation but a swap. Two runs, medians in ms until the DOM shows the result,
+  with Leptos timed again in each:
 
   | Operation (ms) | Leptos, Oct 29 | Stock | Round 2 | Round 4 | Round 5 | Leptos, Oct 30 | Round 7 | Tree | **Signals** |
   | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -62,228 +62,118 @@ repeat it.
   | clear 10,000 rows | 81.5 | 879 | 256.7 | 160.4 | 114.6 | 80.6 | 110.6 | 169.0 | **59.1** |
   | JS heap at 10,000 rows (MB) | 9.6, plus 21.8 linear memory | 184 | 214 | 157 | 138.5 | 9.7, plus 21.8 linear memory | 141.7 | 120.5 | **25.4** |
 
-  - **The columns.** Stock is round 2's run, and round 2 an earlier run of the same day,
-    both kept for scale. All but stock use the corrected harness (see "How the harness
-    times" under Runtime).
-    - **Round 7** is Proscenium on ink after the boundary work ("Round 7").
-    - **Tree** is the prototype of Proscenium's own tree in place of ink, behind the same
-      API ("A first prototype behind Proscenium's API").
-    - **Signals** is the minimal signals core, with the reactive context passed
-      explicitly ("Signals, without implicits").
-  - **Reading across runs.** Compare within a run: load moves every column. Round 7's own
-    run put create 1,000 at 86.5 ms, against 79.9 here. Sub-millisecond operations move
-    by half a millisecond between runs: select took 0.5–1.2 ms on both Leptos and round 5.
-    Round 7's and the tree's clear 2,000 include a garbage collection owed by the earlier
-    operations. Timed alone, round 7's clear matches round 5's (see "Round 7").
-  - **Interactions take 1–6.5 ms in round 5.** That is within a frame, and the next frame
-    lands when Leptos's does: 18.2 against 18.5 ms for a swap, and 19.5 against 19.4 for
-    a remove. The work itself is still 5.5–7 times Leptos's.
-  - **Signals do the same work as Leptos.** A swap is the exception, at 2.1 ms against
-    0.6, which goes to the list's reconcile, the same algorithm as the tree's. The heap at
-    10,000 rows is less than Leptos's JS heap and linear memory together.
-  - **Building lists in round 5 is 2.7–3.8 times Leptos's work, but 1.4–2 times on screen.** Layout
-    and paint cost both the same: about 40 ms for 1,000 rows and 400 ms for 10,000. To the
-    first frame that shows them, 1,000 rows take 127 ms against 64, and 10,000 take
-    1,015 against 577.
-  - **400 cards:** the page is ready in 89 ms against Leptos's 273. A toggle takes
-    0.3–1.5 ms against 0.2–0.8.
-- **Round 1: costs that were not inherent** (no change to how an app is written).
-  - **ink's keyed-children diff.** It was quadratic, relocated every row after the
-    first change, and **put rows in the wrong order** after a move combined with an
-    insertion: stock Proscenium's table diverged from the model. An `O(n log n)`
-    longest-increasing-run rewrite fixes both.
-  - **warp's `Universal.compare` and `==`.** They now run in wasm, and list elements are
-    compared through wasm too. All 92 of warp's tests pass.
-  - **Proscenium's key hints.** They were lists, which warp keeps in JS, so every key
-    comparison crossed into JS. They are now plain data, and select and swap each got
-    about twice as fast again.
-- **Round 2: the architecture.** Under stock ink, a state change anywhere re-ran the UI
-  function from the root.
-  - ink now has `compute_`, a sub-computation whose result its parent never reads. A
-    message for a cell inside one re-runs only the computation that owns the cell, and
-    Proscenium builds every element with it. ink gained two tests and keeps all its old
-    ones.
-  - Proscenium gained `elementWith` (an element whose modifiers its own body computes)
-    and two stores, `Keyed` and `Selector`, which tell only the subscribers whose value
-    changed: Leptos's per-row signals and `Selector`.
-  - The rows app rewritten that way is the "fine-grained" column. It matches Leptos's
-    table through 140 random operations on two seeds.
-- **Round 3: skip the diff on first mount** (ink, from another agent). A new
-  computation no longer reconciles its children against an empty previous list. List
-  creation got 16–21% faster.
-- **Round 4: lists in wasm, and fast paths throughout** (warp, ink and Proscenium, from
-  another agent):
-  - **warp:** `List` is now a balanced tree of 32-element arrays in wasm instead of a
-    JS finger tree, so list operations no longer cross into JS. JS property access and
-    method calls also have direct typed entry points.
-  - **ink:** fast paths for a common prefix and suffix, swaps, appends and clears.
-  - **Proscenium:**
-    - `createElement` for HTML elements
-    - new nodes attached without document fragments
-    - one shared empty listener map
-    - key hints that compare outermost-first
-    - store entries dropped with their last subscriber
+  - **The runs.** The first six columns are 2026-10-29, medians of 10 at load 2.4–2.9
+    (`results/round5-final-rows.json`). Stock is round 2's run, and round 2 an earlier
+    run that day, both kept for scale. The last four are 2026-10-30, medians of 9,
+    interleaved, at load 2–3 (`results/round7-signals-rows.json`). All but stock use the
+    corrected harness ([How the harness times](#how-the-harness-times)). Rounds 1, 3 and
+    6 have no column; their sections have their own runs.
+  - **Compare within a run.** Load moves every column: round 7's own run put create
+    1,000 at 86.5 ms, against 79.9 here, and operations under a millisecond move by half
+    of one. Round 7's and the tree's clear 2,000 include a garbage collection owed by the
+    operations before it. Timed alone, round 7's matches round 5's.
+- **The rounds, and what each changed.** Each section has its own timings and checks.
+  - **[Round 1](#round-1-what-the-libraries-cost):** ink's keyed diff was rewritten in
+    `O(n log n)`, which also fixes a row-ordering bug. warp's `compare` and `==` moved
+    into wasm, and Proscenium's key hints became plain data, so comparing keys stays in
+    wasm. The changes are described under [Experiments](#experiments).
+  - **[Round 2](#round-2-the-architecture):** ink's `compute_` re-runs only the
+    computation that owns a changed cell. Proscenium's `elementWith`, `Keyed` and
+    `Selector` let the rows app update one row at a time, as Leptos's does.
+  - **[Round 3](#round-3-skip-reconciliation-on-first-mount):** ink skips the diff when
+    a computation first mounts. From another agent.
+  - **[Round 4](#round-4-pure-wasm-gc-list-fast-blink-dom-direct-js-ffi-and-trie-overhaul):**
+    warp's `List` became a tree of arrays in wasm, with typed entry points for JS calls,
+    and ink and Proscenium gained fast paths for common list edits. From another agent.
+  - **[Round 5](#round-5-review-of-rounds-3-and-4-dom-sync-and-child-lookup):** a review
+    of rounds 3 and 4, which found one bug, and of the harness, which had counted layout
+    and paint against some operations. Then Proscenium's DOM sync builds new subtrees
+    bottom-up, and ink finds previous children by position.
+  - **[Round 6](#round-6-warp-appends-in-place):** warp's `List` appends in place instead
+    of copying a leaf. It made no measurable difference, so it has no column.
+  - **[Round 7](#round-7-the-boundary-after-the-review):** after the author's review and
+    a count of what each row costs, warp's JS interop takes its arguments unboxed. warp
+    now crosses the wasm–JS boundary as often as Leptos: 32,046 times to create 1,000
+    rows, against 33,007, down from 197,231.
+  - **[The tree](#a-first-prototype-behind-prosceniums-api):** a prototype of
+    Proscenium's own tree in place of ink, behind the same API, the author's preferred
+    direction ([`docs/ProsceniumTree.md`](ProsceniumTree.md)). All four apps and the
+    js-framework-benchmark app run on it unchanged.
+  - **[Signals](#signals-without-implicits):** a minimal signals core in Leptos's model,
+    where a view is built once and effects update their own nodes
+    ([`docs/Signals.md`](Signals.md)). Nothing in warp changed, so most of what rounds
+    1–7 measured was the virtual DOM over ink. Carrying the reactive context in an ability
+    instead of an argument costs up to 10% on building and nothing on updates.
+- **On a page modelled on a real app, the gap is in building, not editing**
+  ([Round 5 again](#round-5-again-with-a-page-taken-from-a-real-app)). The meals page has
+  a week of day cards, a grocery list, a recipe search, a FLIP animation and an SVG
+  mascot. The Leptos copy is written as the real app is, and rebuilds the week on every
+  edit. One interleaved run, 2026-10-30, medians of 9 at load 2–3
+  (`results/round7-signals-meals.json`), in ms until the DOM shows the result:
 
-  Together these cut create-1,000 from 277 to 102 ms and swap from 21 to 6 ms.
-- **Round 5: a review of rounds 3 and 4, and DOM sync.**
-  - **One bug found.** Round 4's new ink test sat under a doc comment, so UCM read it as
-    a definition of an operator `>`. ink gained a junk top-level `(>)`, and so did
-    Proscenium's copy of the library, which leaves it in scope for name resolution
-    there. The test itself never ran. Both are fixed, and the test passes; ink now has
-    45 passing tests.
-  - **No regressions elsewhere.**
-    - A new differential test runs 9,000 random operations of 29 kinds on lists, natively
-      and in wasm, and compares the results line by line. The new wasm `List` agrees
-      with UCM.
-    - The rows table matches Leptos through 200 more random operations.
-    - The 400-card page matches round 2's after every step of a toggle script.
-  - **The harness was unfair on large operations.**
-    - Proscenium renders in a microtask, and the harness waited in tasks, so the
-      browser's layout and paint landed inside some operations' times. That hit warp's
-      list operations and Leptos's 10,000 rows.
-    - Round 4's "faster than Leptos" frame times were the phase of the display's frame
-      clock, not speed.
-    - The harness now waits in microtasks first. Every column above was measured with
-      the fix.
-  - **DOM sync builds new subtrees bottom-up.** ink resolves a new node after all of
-    its children, so Proscenium can attach each pending child as soon as its parent
-    exists. A whole row then joins the index of live nodes in one step, where it used
-    to take a walk from the root for every node. Removals under one parent also share a
-    walk, and clearing an element clears it in one step.
-    - Sync time for create-1,000 fell from 69 to 44 ms, and for create-10,000 from 753
-      to 390 ms.
-    - Clear-10,000 fell from 92 to 51 ms.
-  - **ink finds previous children by position.** A re-run used to build a map of all of
-    its previous children. Now it tries the child where the last one left off, scans on
-    a miss, and indexes only after scanning three times the list. In a 15-run comparison,
-    swap went from 5.7 to 4.3 ms and remove from 5.4 to 4.7; clearing went from 33 to
-    23 ms at 2,000 rows and from 127 to 112 at 10,000. ink has a test for it and 46
-    passing tests.
-  - **Against round 4:** swap is a third faster, append 31%, create-10,000 26%,
-    clear-2,000 64% and clear-10,000 29%; the heap is 12% smaller.
-  - **What is left is mostly warp's runtime.** The same DOM work for 1,000 rows takes
-    7.3 ms in plain JS, or 3.6 ms cloning a template as Leptos does. A CPU profile of
-    creating 1,000 rows puts the rest of the work in four places:
-    - garbage collection: about 20 ms
-    - `callDirect` and `apply*`: 15–20 ms. `callDirect` is how JS calls into Unison, and
-      `apply*` applies a closure whose code is not known statically. Ordinary calls to
-      a known function that needs no abilities are already direct (corrected
-      2026-10-30, after the author's review).
-    - crossings between wasm and JS: about 10 ms
-    - the DOM calls themselves: about 8 ms
+  | Operation (ms) | Leptos | Round 7 | Tree | **Signals** |
+  | --- | --- | --- | --- | --- |
+  | page ready | 21.7 | 47.4 | 38.2 | **31.0** |
+  | plan the week | 5.1 | 9.5 | 9.3 | **6.0** |
+  | re-plan the week | 1.3 | 4.6 | 2.3 | **2.3** |
+  | shuffle a meal | 2.1 | 1.1 | 0.9 | **1.5** |
+  | one more serving | 1.3 | 1.0 | 0.6 | **0.5** |
+  | remove a meal | 1.4 | 2.2 | 0.7 | **0.7** |
+  | move a day (FLIP) | 2.0 | 1.6 | 1.1 | **0.9** |
+  | type 7 keys in the search | 2.2 | 5.0 | 3.9 | **3.7** |
+  | clear the search (240 results back) | 2.2 | 9.3 | 6.2 | **2.9** |
 
-    No library function is more than a few milliseconds. Batching DOM calls could save
-    at most the crossings. "Measured attribution" below says what the allocation and the
-    calls actually are.
-- **On a page modelled on a real app, the gap mostly closes.** The new meals page
-  imitates a production app's Meals page: a week of day cards, a grocery list, a recipe
-  search, a FLIP animation and an SVG mascot.
-  - Editing one meal is as fast as Leptos or faster (1.1–1.5 ms against 1.5–2.1). The
-    Leptos page, written as the real app writes it, rebuilds the whole week on every
-    edit, while ink re-renders only the day that changed.
-  - The FLIP animation costs the same per frame in Unison as in Rust.
-  - The mascot is animated by CSS alone, so it costs neither framework anything per frame.
-  - Creating many elements is still 2–4.5 times Leptos: mounting the page, re-planning
-    the week, bringing back 240 search results.
-  - Every operation lands in the same frame as Leptos's, except planning the week, which
-    lands about 10 ms later.
-  - The shipped code is 62 KB brotli against 86 KB. A release build after an edit is
-    about the same at this size (5.8 s against 6.4 s).
-- **What the remaining cost is made of (2026-10-30, after the author's review).**
-  Counting at the boundary and inside the module, creating 1,000 rows:
-  - **Crossings:** about as many calls into JS as Leptos makes (36,000 against 32,000),
-    but 161,000 calls back from warp's JS glue into wasm, where Leptos has 1,000.
-  - **Allocations:** 4,572 a row: argument arrays 38%, data 17%, boxed numbers 10%,
-    continuations 8%.
-  - **Unboxing:** wasm-opt removes 39% of the number boxes but only 8% of all
-    allocations.
-  - **Ability operations:** 41 a row, each capturing a continuation, which warp does not
-    special-case.
-
-  The fixes, in order: unwrap arguments in wasm instead of in the glue; allocate less in
-  generic and partial application; compile handlers that resume once, at the end, as
-  direct calls (measured since at 2–3%, and not built); finish `==` and `compare` in
-  wasm. See "Measured attribution".
-- **Round 7 did the first and the last.**
-  - **Boundary:** warp's JS interop takes its arguments unboxed, `==` compares functions
-    in wasm, and comparisons share their result boxes. warp now crosses the boundary as
-    often as Leptos: 32,046 times to create 1,000 rows, against 33,007, down from
-    197,231.
-  - **Speed:** lists build 5–23% faster (create 1,000 91.5 to 86.5 ms, append 59.1 to
-    45.8, create 10,000 697 to 608), and interactions are unchanged.
-  - **What is left:** allocation and ability operations. The next step is a tree of
-    Proscenium's own (`docs/ProsceniumTree.md`), the author's preferred direction,
-    which removes one of the two ability operations per element.
-  - **On the meals page,** a meal edit now takes about half Leptos's time (shuffle 0.9
-    against 2.3 ms). Part of that came from moving the search's filter behind a skip
-    boundary: in Proscenium a `region` is a key, not a memo, and only elements are
-    skipped.
-  - **In js-framework-benchmark** (local run, against Leptos 0.7.0's entry), round 7 is:
-    - 1.3–2.3 times Leptos on list operations;
-    - faster on select and first paint;
-    - lighter when ready;
-    - 2.8 times the memory with 1,000 rows;
-    - about the same size.
-- **Without ink, the floor is close to Leptos** ("A floor for a tree without ink"). A
-  keyed virtual DOM in plain Unison, about 200 lines with no ink and no Proscenium, runs
-  the rows app on warp r7f:
-  - **Creating 1,000 rows:** 94 ms against round 7's 150 and Leptos's 76, with 1,041
-    allocations a row instead of 4,198.
-  - **Creating 10,000 rows:** 756 against 1,177 and 812.
-  - **Memory at 10,000 rows:** 44 MB against 152.
-  - **Interactions:** within a few ms of both.
-  - **With an ability:** written through an `Html` ability with one handler, one
-    operation per element, it costs 13% more to create 1,000 rows and 24% more for
-    10,000. Proscenium has two handlers today.
-  - **Size:** the module is 18 KB brotli. warp builds it in 0.24 s.
-- **Stock warp miscounts `Text`** ("Text by code point"). A differential fuzz of 1,800
-  text operations fails on 1.4.2 within 24 operations. warp counts and orders `Text` in
-  UTF-16 units, so an emoji is two characters and a text `match` can miss its arm.
-  `offer-3-text` fixes it, standalone on 1.4.2, and so does `perf-r7-142`.
-- **One-shot continuations are enough for Proscenium and ink** ("One-shot continuations").
-  With every captured continuation made one-shot, the three apps pass every check and
-  suite. Only base's `Each` resumes twice. That answers the cost the author named for
-  dropping CPS in favour of stack switching.
-- **A signals UI on today's warp runs at Leptos's speed** ("Signals, without implicits",
-  `docs/Signals.md`). A minimal signals core in Leptos's model, with views built once and
-  effects that update their own DOM nodes, runs the rows suite:
-  - **Creating 1,000 rows:** 31.2 ms against Leptos's 26.4, round 7's 79.9 and the tree's
-    69.2.
-  - **Update every 10th:** 0.8 against 0.7.
-  - **Creating 10,000 rows:** 155 against 161.
-  - **Heap at 10,000 rows:** 25 MB against the tree's 121, and less than Leptos's JS heap
-    and linear memory together.
-  - **The module:** 19.9 KB brotli.
-
-  The meals page on the same core makes a meal's edit the fastest of the four builds,
-  and plans the week in 6.0 ms against Leptos's 5.1. Nothing in warp changed: the cost
-  measured in rounds 1 to 7 was the virtual DOM over ink. Carrying the reactive context
-  in an ability instead of an argument costs up to 10% on building and nothing on
-  updates. Implicits would run as explicit passing does.
-- **Neither handler shortcut would pay yet.**
-  - **A direct path for handlers that resume once:** every one of the 41 operations a
-    row has the shape ("Handlers that resume once"). But an operation costs about 70 ns
-    in warp's output, so the most such a path could save is about 3 ms per 1,000 rows,
-    2–3%.
-  - **Stack switching:** in Chromium's experimental V8, a switch costs 53–55 ns, as much
-    as warp's continuation passing ("Stack switching, timed at the mechanism").
-
-  The cost of a row is in ink's bookkeeping and the DOM, which the tree prototype
-  removed.
-- **A Leptos limit we may hit:** the 1,600-card benchmark app puts 80 page components in
-  one `view!`, and mounting it overflowed wasm's default 1 MB stack. This happened in both
-  dev and release builds, as `memory access out of bounds`, and an 8 MB stack fixed it.
-  Leptos's nested static view types need a deep stack to mount a large view. An app
-  that is far from this limit gets no warning as it approaches it.
+  The FLIP animation costs the same per frame from Unison as from Rust, and the mascot is
+  animated by CSS alone. On the 400-card page, round 5 is ready in 89 ms against Leptos's
+  273, and a toggle takes 0.3–1.5 ms against 0.2–0.8.
+- **In js-framework-benchmark** ([its section](#in-js-framework-benchmark)), Proscenium has
+  a local entry that passes the suite's keyed check. Round 7 against Leptos 0.7.0's entry,
+  on the suite's own measure (click to painted frame):
+  - 1.3–3 times Leptos's time where lists change;
+  - select 8.6 ms against 18.0, and first paint 353 ms against 365;
+  - half the memory when ready, and 2.8 times with 1,000 rows;
+  - 54 KB compressed against 49.
+- **What a row cost before round 7** ([Measured attribution](#measured-attribution)).
+  Creating 1,000 rows made 161,000 calls from warp's JS glue back into wasm, where Leptos
+  makes 1,000. Each row took 4,572 allocations and 41 ability operations. Round 7 removed
+  the calls back. The rest comes from how ink and Proscenium are written: a keyed virtual
+  DOM in 200 lines of plain Unison allocates a quarter as much per row
+  ([A floor for a tree without ink](#a-floor-for-a-tree-without-ink)).
+- **Neither handler shortcut would pay yet.** An ability operation costs about 70 ns in
+  warp's output, so a direct path for handlers that resume once could save at most 2–3%
+  of building a row
+  ([Handlers that resume once](#handlers-that-resume-once-detected-and-the-ceiling-measured)).
+  A stack switch in V8 costs as much as warp's continuation passing does
+  ([Stack switching](#stack-switching-timed-at-the-mechanism)). Nothing in Proscenium or
+  ink resumes a continuation twice, so one-shot continuations would be enough
+  ([One-shot continuations](#one-shot-continuations-what-resumes-twice)).
+- **Bugs found on the way:**
+  - **ink:** the keyed diff put a row in the wrong place after a move and an insert, in
+    stock Proscenium
+    ([fixed in round 1](#ink-an-on-log-n-keyed-reconcile-and-an-ordering-bug-fixed), and
+    offered alone on `offer-1-ordering`). A test added in round 4 never ran, because a
+    doc comment before `test>` made UCM define an operator `>` instead (found in round 5).
+  - **warp:** stock warp counts `Text` in UTF-16 units, so an emoji is two characters and
+    a text `match` can miss its arm
+    ([Text by code point](#text-by-code-point-a-differential-fuzz-and-a-bug-in-stock-warp)).
+    It is fixed on `offer-3-text`.
+  - **UCM 1.5.0:** applying a function read from a `Ref`, `(Ref.read r)()`, fails at `run`
+    or `compile` ([the repro](../unison/ucm-bugs/ref-read-applied.md)).
+  - **Our harness:** until round 5, it counted the browser's layout and paint against
+    some operations ([How the harness times](#how-the-harness-times)).
+- **A Leptos limit we may hit:** mounting the 1,600-card app, with 80 page components in
+  one `view!`, overflowed wasm's default 1 MB stack in dev and release builds
+  (`memory access out of bounds`). An 8 MB stack fixed it. Nothing warns an app as it
+  approaches the limit.
 - **Recommendation:**
   - The build-time win is real, and it grows with app size.
-  - Interactive screens no longer feel different from Leptos. An interaction takes
-    1–6.5 ms, and its frame lands when Leptos's does. A form, a settings screen or a list
-    of tens to hundreds of items would make a fair trial now.
+  - Interactive screens no longer feel different from Leptos. On Proscenium as it is, an
+    interaction takes 1–6.5 ms, and its frame lands when Leptos's does. A form, a settings
+    screen or a list of tens to hundreds of items would make a fair trial now.
   - Long lists still cost more on Proscenium as it is: about twice as long to the frame
     for 1,000 rows, and 4.4 times the memory at 10,000. A signals library on today's
-    warp does not have that cost ("Signals, without implicits"), so a screen that builds
-    thousands of rows at once is a question of which library, not of warp.
+    warp does not have that cost, so a screen that builds thousands of rows at once is a
+    question of which library, not of warp.
   - Upstream the fixes first. The ink ordering bug affects every Proscenium user, and
     the other changes are general.
 
@@ -1062,8 +952,9 @@ Scratch file `unison/scratch/proscenium--perf-r5.u`, branch
   `textContent = ""` instead of one `remove()` per child.
 - **Tests.** Proscenium's four tests pass. `ReleaseNotes` has a dated entry.
 
-Sync time fell by a third to a half for every list operation (table above). In the full
-rows run (the summary's table) round 5 against round 4 is:
+Sync time fell by a third to a half for every list operation (table above). In a full
+rows run that day, before ink's change below (`results/round5-runtime-rows.json`), round
+5 against round 4 is:
 
 | Operation | Round 4 | Round 5 |
 | --- | --- | --- |
@@ -1149,27 +1040,6 @@ remove 5.4 → 4.2, update every 10th 5.7 → 4.8, append 34.8 → 29.7. On opti
 and everything else within noise. It is kept, since its tests and the consistency check
 pass, but it buys nothing in a shipped build.
 
-#### warp: appends in place
-
-Scratch file `unison/scratch/warp--perf-r5.u`, branch
-`@dfreeman/warp/perf-r5` (from `perf-r4`), used by `@dfreeman/proscenium/perf-r6` (from
-`perf-r5k`):
-
-- **The change.** Round 4's `List.:+` copied a leaf of up to 32 elements on every
-  append. Now a copied leaf gets spare capacity, and so does a tree's new last leaf, with
-  the unused slots holding a unique marker value (`ListOps.emitHole`). An append whose
-  slot still holds the marker writes in place, sharing the array, and rebuilds only the
-  tree's right spine (`ListOps.emitSnocInPlace`). An append to the same list a second
-  time finds the slot taken, and copies.
-- **Tests.** `tests.builtins.listSnocSharing` covers appending twice to one list, and
-  appending to a prefix or a suffix of a list, for a leaf and for a tree. warp's whole
-  suite passes, and so does the 9,000-operation differential test. A deliberately wrong
-  assertion fails, so the harness does report failures. The rows table still matches
-  Leptos, and the card page matches round 5's.
-- **The result: no measurable change.** In the phase split, create-10,000's reconcile
-  went from 323 to 306 ms and everything else was within noise. Copying leaves was not
-  a meaningful share of the garbage.
-
 #### Where the rest goes
 
 A CPU profile of creating 1,000 rows (debug-named build of `perf-r5i`, a 140 ms window
@@ -1200,6 +1070,22 @@ Two conclusions follow:
   through `callDirect`, and the continuations that effect handlers capture. "Measured
   attribution" below counts each.
 
+#### The summary's run
+
+The summary's "Round 5" column is `perf-r5i`, with both changes above. It is timed with
+Leptos and round 4 in one run, medians of 10 at load 2.4–2.9
+(`results/round5-final-rows.json`):
+
+- **Interactions take 1–6.5 ms, 5.5–7 times Leptos's work, but within a frame.** The next
+  frame lands when Leptos's does: 18.2 against 18.5 ms for a swap, and 19.5 against 19.4
+  for a remove.
+- **Building lists is 2.7–3.8 times Leptos's work, but 1.4–2 times on screen.** Layout and
+  paint cost both the same: about 40 ms for 1,000 rows and 400 ms for 10,000. To the
+  first frame that shows them, 1,000 rows take 127 ms against 64, and 10,000 take 1,015
+  against 577.
+- **Against round 4,** swap is a third faster, append 31%, create-10,000 26%, clear-2,000
+  64% and clear-10,000 29%. The heap is 12% smaller.
+
 #### What is left
 
 Reconcile is now the larger part of every operation except creating 10,000 rows (390 ms of
@@ -1218,6 +1104,30 @@ sync against 305 of reconcile):
   through continuations.
 
 "Next experiments" lists what would address each.
+
+### Round 6: warp appends in place
+
+Scratch file `unison/scratch/warp--perf-r5.u`, branch
+`@dfreeman/warp/perf-r5` (from `perf-r4`), used by `@dfreeman/proscenium/perf-r6` (from
+`perf-r5k`):
+
+- **The change.** Round 4's `List.:+` copied a leaf of up to 32 elements on every
+  append. Now a copied leaf gets spare capacity, and so does a tree's new last leaf, with
+  the unused slots holding a unique marker value (`ListOps.emitHole`). An append whose
+  slot still holds the marker writes in place, sharing the array, and rebuilds only the
+  tree's right spine (`ListOps.emitSnocInPlace`). An append to the same list a second
+  time finds the slot taken, and copies.
+- **Tests.** `tests.builtins.listSnocSharing` covers appending twice to one list, and
+  appending to a prefix or a suffix of a list, for a leaf and for a tree. warp's whole
+  suite passes, and so does the 9,000-operation differential test. A deliberately wrong
+  assertion fails, so the harness does report failures. The rows table still matches
+  Leptos, and the card page matches round 5's.
+- **The result: no measurable change.** In the phase split, create-10,000's reconcile
+  went from 323 to 306 ms and everything else was within noise. Copying leaves was not
+  a meaningful share of the garbage.
+
+Since it bought nothing, the work after it builds on Proscenium `perf-r5i` and warp
+`perf-r4`, without it, and the summary's table has no column for it.
 
 ### Round 5 again, with a page taken from a real app
 
@@ -2569,7 +2479,7 @@ boundary (round 7).
   - the Proscenium chain `perf` → `perf-compare` → `perf-eq` → `perf-keys` →
     `perf-targeted` → `perf-fine` → `perf-mount-compute` → `perf-r4` → `perf-r5` →
     `perf-r5i` (round 5's sync on ink `perf-r5`: the "Round 5" column) → `perf-r5k`
-    (single-pass key counts) → `perf-r6` (on warp `perf-r5`, appends in place); the
+    (single-pass key counts) → `perf-r6` (round 6: on warp `perf-r5`, appends in place); the
     rows app is `bench.rowsfg` and the 400 stateful cards `bench.cards.s400i`
   - round 7 and after, on 2026-10-30:
     - warp `perf-r7`, `perf-r7u`, `perf-r7w`, `perf-r7-142`, the stacked offers

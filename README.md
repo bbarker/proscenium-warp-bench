@@ -5,50 +5,28 @@ compiled to WebAssembly by [warp](https://share.unison-lang.org/@dfreeman/warp))
 Rust with [Leptos](https://leptos.dev)? This repository holds the benchmark, its raw results, the
 living report, and the changes made to ink, warp and Proscenium to narrow the gap.
 
-Start with [`docs/REPORT.md`](docs/REPORT.md); its executive summary has the numbers.
+Start with [`docs/REPORT.md`](docs/REPORT.md). Its executive summary has the numbers and
+a line on each round, and each round's section has the details.
 
 ## Findings, in short
 
-- **Release builds:** 10–25 times faster than Leptos (about 8 s against 83 s at 400 stateful
-  cards; about 26 s against 634 s at 1,600), and the gap grows with size.
-- **Code size:** about half of Leptos's raw wasm, but larger under brotli.
-- **Runtime:** stock Proscenium was 50–300 times slower than Leptos on a
-  js-framework-benchmark table. After five rounds of changes, an interaction (swap, remove, select,
-  update) takes 1–6.5 ms, 5.5–7 times Leptos's work but in the same frame; building a list is
-  2.7–3.8 times Leptos's work. What is left is mostly in warp's runtime: allocation, closures
-  applied through `apply*`, calls in from JS, and continuations captured by effect handlers.
-  Ordinary calls to known ability-free functions are already direct (the author's review,
-  2026-10-30, in the report).
-- **Round 7, after the review:**
-  - warp's JS interop now takes its arguments unboxed, so warp crosses the wasm–JS
-    boundary as often as Leptos does: 32,046 times to create 1,000 rows, against 33,007
-    for Leptos and 197,231 before.
-  - Building lists got 5–23% faster.
-  - What remains is allocation (about 4,400 objects a row) and 41 ability operations a
-    row, two per element. `docs/ProsceniumTree.md` is the design for removing one of the
-    two.
-- **js-framework-benchmark:** Proscenium has a local entry (`bench/js-framework-benchmark/`)
-  that passes the suite's keyed check, in a stock and a round 7 version. Round 7 against
-  Leptos 0.7.0's entry:
-  - 1.3–2.3 times Leptos on list operations;
-  - select: 8.6 against 18.0 ms;
-  - first paint: 353 against 365 ms;
-  - memory: half when ready, 2.8 times with 1,000 rows;
-  - size: 54 against 49 KB compressed.
-- **Meals page, round 7:** a meal edit takes about half Leptos's time, after moving the
-  search's filter inside its element. A Proscenium `region` is not a skip boundary.
-- **On a page modelled on a real app** (a meal planner's week, grocery list, search and FLIP animation),
-  editing one meal is as fast as Leptos or faster, animation frames cost the same, and only creating
-  many elements at once is still 2–4.5 times Leptos. Its shipped code is 62 KB against 86 KB brotli.
-- **Bugs found on the way:** an ordering bug in ink's keyed diff (stock Proscenium puts a row in the
-  wrong place after a move and an insert), and an ink test that never ran because a doc comment
-  sat in front of `test>`.
+- **Build time:** release builds are 10–25 times faster than Leptos's, and the gap grows
+  with app size.
+- **Size:** about half of Leptos's raw wasm, but larger under brotli on repetitive code.
+- **Runtime:** rounds of changes to ink, warp and Proscenium took a js-framework-benchmark
+  table from 50–300 times Leptos's time to 1.4–7 times. A minimal signals library on the
+  same warp runs it at about Leptos's speed ([`docs/Signals.md`](docs/Signals.md)).
+- **Bugs:** the work found bugs in ink, warp and UCM; the report's summary lists them.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `docs/REPORT.md` | The report, with an executive summary at the top |
+| `docs/ReviewResponse.md` | For the author: the work done since their review, and what it showed |
+| `docs/ProsceniumTree.md` | A tree of Proscenium's own in place of ink: the design note |
+| `docs/Signals.md` | A signals core without implicits, against the tree and Leptos |
+| `docs/TailResumptive.md` | Handlers that resume once: the design note for warp, and the ceiling measured |
 | `docs/UnisonSteps.md` | How to recreate the Unison branches from the scratch files |
 | `docs/PublishingBranches.md` | How the branches below were published |
 | `bench/frontend-wasm/` | Build, size and browser-timing scripts; the Rust (Leptos) apps; raw results |
@@ -77,7 +55,7 @@ clone of the upstream project named in the first row, and the report writes them
 | --- | --- | --- |
 | [`perf`](https://share.unison-lang.org/@nusentry/warp/code/perf) | `Universal.compare` and `Universal.==` in wasm. From warp 1.3.0. | round 1 |
 | [`perf-r4`](https://share.unison-lang.org/@nusentry/warp/code/perf-r4) | `List` as a wasm tree of arrays, direct typed JS calls, a list fuzz test. | round 4–5 |
-| [`perf-r5`](https://share.unison-lang.org/@nusentry/warp/code/perf-r5) | `List.:+` appends in place; sharing tests. | round 5 |
+| [`perf-r5`](https://share.unison-lang.org/@nusentry/warp/code/perf-r5) | `List.:+` appends in place; sharing tests. No measurable change. | round 6 |
 | [`perf-r7`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7) | From `perf-r4`: JS interop, `Nat.toText` and `Text.indexOf` take unboxed arguments (`jsUnboxed`); `==` compares a function with a closure by id in wasm; `compare`, `==` and Boolean intrinsics return shared boxes; `Text.size`/`take`/`drop`/`uncons`/`unsnoc`/`repeat`/`reverse` and three `Char` builtins over `wasm:js-string`. | round 7 |
 | [`perf-r7u`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7u) | `perf-r7` with `Nat.toText` written in Unison (an experiment: 8 times slower than unboxed JS). | round 7 |
 | [`perf-r7w`](https://share.unison-lang.org/@nusentry/warp/code/perf-r7w) | `perf-r7` with `Nat.toText` in the instruction DSL (an experiment: 5 times slower than unboxed JS). | round 7 |
@@ -112,7 +90,7 @@ Each branch is built on the one before it, and carries the ink and warp versions
 | [`perf-r5`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r5) | + DOM sync built bottom-up. | round 5 |
 | [`perf-r5i`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r5i) | + ink `perf-r5`. The report's "Round 5" column. | round 5 |
 | [`perf-r5k`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r5k) | + single-pass key counts. | round 5 |
-| [`perf-r6`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r6) | + warp `perf-r5` (in-place append). No measurable change. | round 5 |
+| [`perf-r6`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r6) | + warp `perf-r5` (in-place append). No measurable change. | round 6 |
 | [`perf-r5m`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r5m) | `perf-r5i` + the meal-planner benchmark page (`bench.meals`). | round 5, meals |
 | [`perf-r7`](https://share.unison-lang.org/@nusentry/proscenium/code/perf-r7) | `perf-r5m` on warp `perf-r7`, + the js-framework-benchmark app (`bench.jfb`). | round 7 |
 | [`bench-jfb`](https://share.unison-lang.org/@nusentry/proscenium/code/bench-jfb) | `bench` + the js-framework-benchmark app for stock Proscenium (`bench.jfbstock`). | round 7 |
