@@ -8,6 +8,18 @@ project of the same name under your own handle (below, `@nusentry`; change it wi
 `sed -i 's/@nusentry/@yourhandle/g' unison/publish.md README.md docs/PublishingBranches.md`).
 
 - [ ] Log in: `ucm` then `auth.login`.
+- [ ] Give each project a local branch `base` holding the upstream release the benchmark starts
+      from. It becomes the project's `main` on Share, which Share needs before the project's
+      settings work ("No default branch"). In the benchmark codebase this was done on 2026-10-31:
+
+```ucm
+scratch/main> clone @dfreeman/ink/releases/2.0.1
+scratch/main> clone @dfreeman/proscenium/releases/0.4.3
+@dfreeman/ink/releases/2.0.1> branch base
+@dfreeman/warp/releases/1.3.0> branch base
+@dfreeman/proscenium/releases/0.4.3> branch base
+```
+
 - [ ] Push a single branch first, to see that the form of the command works and that the project is
       created under your handle:
 

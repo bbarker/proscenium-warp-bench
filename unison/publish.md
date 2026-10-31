@@ -8,7 +8,12 @@ Here `<codebase>` is the one holding the `@dfreeman/*` branches (see `docs/Publi
 
 Each line is `push <remote> <local>`. A branch that is already pushed and unchanged is a no-op, so the whole file is safe to rerun. A transcript stops at the first failure, and the error names the line.
 
+The first three lines push each project's `main`, which Share needs before a project's settings work. Each is the upstream release the benchmark starts from, as a local branch `base` (see `docs/PublishingBranches.md` for making it).
+
 ```ucm
+@dfreeman/proscenium/bench> push @nusentry/ink/main @dfreeman/ink/base
+@dfreeman/proscenium/bench> push @nusentry/warp/main @dfreeman/warp/base
+@dfreeman/proscenium/bench> push @nusentry/proscenium/main @dfreeman/proscenium/base
 @dfreeman/proscenium/bench> push @nusentry/ink/perf @dfreeman/ink/perf
 @dfreeman/proscenium/bench> push @nusentry/ink/perf-mount-compute @dfreeman/ink/perf-mount-compute
 @dfreeman/proscenium/bench> push @nusentry/ink/perf-r4 @dfreeman/ink/perf-r4
